@@ -16,7 +16,7 @@ add_executable(torvpn
  main.cpp
 )
 
-target_link_libraries(torvpn mbedtls)
+target_link_libraries(torvpn mbedtls sodium)
 
 add_custom_command(TARGET torvpn POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
