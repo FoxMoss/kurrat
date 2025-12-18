@@ -1,3 +1,4 @@
+#include "mbedtls/x509.h"
 #include "tor.hpp"
 #include <arpa/inet.h>
 #include <cstddef>
@@ -15,6 +16,7 @@
 #include <netinet/tcp.h>
 #include <sodium.h>
 #include <sodium/crypto_sign.h>
+#include <sodium/crypto_sign_ed25519.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -186,21 +188,39 @@ int main() {
 
   // read public id key
 
-  FILE *signing_public_key = fopen(
-      "/home/foxmoss/Projects/TorVPN/keys/ed25519_signing_public_key", "rb");
+  FILE *signing_secret_key = fopen(
+      "/home/foxmoss/Projects/TorVPN/keys/ed25519_signing_secret_key", "rb");
 
-  fseek(signing_public_key, 0x20, SEEK_SET);
+  fseek(signing_secret_key, 0x20, SEEK_SET);
+
+  std::vector<uint8_t> secret_key;
+  secret_key.insert(secret_key.end(), 64, 0);
+  fread(secret_key.data(), 1, 64, signing_secret_key);
+  fclose(signing_secret_key);
 
   std::vector<uint8_t> public_key;
-  public_key.insert(public_key.end(), 32, 0);
-  fread(public_key.data(), 1, 32, signing_public_key);
-  fclose(signing_public_key);
+  public_key.insert(public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
+  crypto_sign_ed25519_sk_to_pk(public_key.data(), secret_key.data());
+
+  // get responder x509
+  const mbedtls_x509_crt *responder_cert = mbedtls_ssl_get_peer_cert(&ssl);
+  std::vector<uint8_t> responder_data;
+  responder_data.insert(responder_data.end(), responder_cert->raw.p,
+                        responder_cert->raw.p + responder_cert->raw.len);
+
+  // keying_material
+  std::vector<uint8_t> keying_material;
+  keying_material.insert(keying_material.end(), 32, 0);
+  std::string label = "EXPORTER FOR TOR TLS CLIENT BINDING AUTH0003";
+  mbedtls_ssl_export_keying_material(
+      &ssl, keying_material.data(), 32, label.c_str(), label.size(),
+      public_key.data(), public_key.size(), true);
 
   // start the tor connection
 
   TorConnection connection(cert->cert, public_key, cert->link_secret_key,
                            cert->link_public_key, my_addr_raw, other_addr_raw,
-                           secret_key_rsa);
+                           secret_key_rsa, responder_data, keying_material);
 
   std::vector<uint8_t> send_buffer = {};
   std::vector<uint8_t> initiator_log = {};

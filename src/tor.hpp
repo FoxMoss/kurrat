@@ -4,6 +4,7 @@
 #include "mbedtls/x509.h"
 #include "mbedtls/x509_crl.h"
 #include "mbedtls/x509_crt.h"
+#include "psa/crypto.h"
 #include <arpa/inet.h>
 #include <cstddef>
 #include <cstdint>
@@ -42,10 +43,13 @@ public:
                 std::vector<uint8_t> local_KP_relayid_ed,
                 std::vector<uint8_t> link_secret_key,
                 std::vector<uint8_t> link_public_key, uint32_t my_addr,
-                uint32_t other_addr, std::vector<uint8_t> rsa_secret_key)
+                uint32_t other_addr, std::vector<uint8_t> rsa_secret_key,
+                std::vector<uint8_t> responder_cert,
+                std::vector<uint8_t> keying_material)
       : local_KP_relayid_ed(local_KP_relayid_ed),
-        link_secret_key(link_secret_key), link_public_key(link_public_key),
-        my_addr(htonl(my_addr)), other_addr(htonl(other_addr)) {
+        responder_cert(responder_cert), link_secret_key(link_secret_key),
+        link_public_key(link_public_key), my_addr(htonl(my_addr)),
+        other_addr(htonl(other_addr)) {
     local_certs.push_back({0x06, my_cert});
 
     mbedtls_pk_init(&rsa_pk);
@@ -62,11 +66,12 @@ public:
     int der_len =
         mbedtls_pk_write_pubkey_der(&rsa_pk, der_buf, sizeof(der_buf));
 
-    printf("%s\n", der_buf);
+    printf("%s\n", der_buf + (4096 - der_len));
 
     local_KP_relayid_rsa.insert(local_KP_relayid_rsa.end(),
                                 (uint8_t *)der_buf + (4096 - der_len),
                                 der_buf + 4096);
+    psa_crypto_init();
   }
   ~TorConnection() {
     mbedtls_entropy_free(&entropy);
@@ -169,15 +174,14 @@ public:
 
     printf("%i\n", ntohs(circ_id.value()));
     printf("%i\n", command.value());
-    return_buffer.erase(return_buffer.begin(), return_buffer.begin() + cursor);
     if (!sent_auth) {
-
       responder_log.insert(responder_log.end(), return_buffer.begin(),
                            return_buffer.begin() + cursor);
 
       initiator_log.insert(initiator_log.end(), send_buffer.begin(),
                            send_buffer.end());
     }
+    return_buffer.erase(return_buffer.begin(), return_buffer.begin() + cursor);
 
     // we need it for the log but then we can stop logging
     if (command.value() == 8) {
@@ -283,9 +287,9 @@ private:
     mbedtls_x509_crt_free(&crt);
 
     FILE *rsa_file = fopen("rsa.log", "w");
-    printf("%s\n", der_buf);
+    printf("%s\n", der_buf + 4096 - der_len);
 
-    fwrite(der_buf, strlen((char *)der_buf), 1, rsa_file);
+    fwrite(der_buf + 4096 - der_len, der_len, 1, rsa_file);
     remote_KP_relayid_rsa.insert(remote_KP_relayid_rsa.end(),
                                  der_buf + 4096 - der_len, der_buf + 4096);
     fclose(rsa_file);
@@ -343,6 +347,7 @@ private:
         printf("SIGNING_V_LINK_AUTH = 0x06\n");
         break;
       case RSA_ID_V_IDENTITY:
+        parse_rsa_cert(cert.value());
         printf("RSA_ID_V_IDENTITY = 0x07\n");
         break;
       case BLINDED_ID_V_SIGNING:
@@ -401,6 +406,8 @@ private:
     return true;
   }
   mbedtls_pk_context rsa_pk;
+  std::vector<uint8_t> responder_cert;
+  std::vector<uint8_t> keying_material;
   std::vector<uint8_t> link_secret_key;
   std::vector<uint8_t> link_public_key;
   void generate_authenticate_cell(std::vector<uint8_t> &send_buffer,
@@ -451,6 +458,30 @@ private:
       auth_buffer.insert(auth_buffer.end(), local_log_hash,
                          local_log_hash + 32);
 
+      // tls here
+
+      uint8_t scert_hash[32];
+      mbedtls_sha256(responder_cert.data(), responder_cert.size(), scert_hash,
+                     false);
+      auth_buffer.insert(auth_buffer.end(), scert_hash, scert_hash + 32);
+
+      auth_buffer.insert(auth_buffer.end(), keying_material.begin(),
+                         keying_material.end());
+
+      std::vector<uint8_t> random_buf;
+      random_buf.insert(random_buf.end(), 24, 0);
+      psa_generate_random(random_buf.data(), random_buf.size());
+
+      auth_buffer.insert(auth_buffer.end(), random_buf.begin(),
+                         random_buf.end());
+
+      unsigned char signature[crypto_sign_BYTES];
+      crypto_sign_detached(signature, NULL, auth_buffer.data(),
+                           auth_buffer.size(), link_secret_key.data());
+
+      auth_buffer.insert(auth_buffer.end(), signature,
+                         signature + crypto_sign_BYTES);
+
       // auth_buffer.insert()
       // data.insert(data.end(), (uint8_t *)&auth_type,
       //             (uint8_t *)&auth_type + sizeof(uint16_t));
@@ -467,6 +498,15 @@ private:
       //
       // data.insert(data.end(), signature, signature +
       // crypto_sign_BYTES);
+      //
+      uint16_t auth_length = auth_buffer.size();
+      auth_length = htons(auth_length);
+      data.insert(data.end(), (uint8_t *)&auth_type,
+                  (uint8_t *)&auth_type + sizeof(uint16_t));
+      data.insert(data.end(), (uint8_t *)&auth_length,
+                  (uint8_t *)&auth_length + sizeof(uint16_t));
+      data.insert(data.end(), auth_buffer.begin(), auth_buffer.end());
+
       generate_cell_variable(send_buffer, 0, 131, data);
     }
 
