@@ -122,7 +122,7 @@ int main() {
   mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                         (const unsigned char *)"client", 6);
 
-  mbedtls_net_connect(&server_ctx, "107.189.1.175", "9001",
+  mbedtls_net_connect(&server_ctx, "23.191.200.26", "443",
                       MBEDTLS_NET_PROTO_TCP);
 
   mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
@@ -160,13 +160,13 @@ int main() {
   auto cert = create_link_cert();
 
   // reduce size format of ip addresses
-  std::string other_addr_str = "107.189.1.175";
+  std::string other_addr_str = "23.191.200.26";
 
   struct in_addr other_addr;
   inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
   uint32_t other_addr_raw = other_addr.s_addr;
 
-  std::string my_addr_str = "205.185.125.167";
+  std::string my_addr_str = "73.24.22.153";
 
   struct in_addr my_addr;
   inet_pton(AF_INET, my_addr_str.c_str(), &my_addr);
@@ -186,8 +186,7 @@ int main() {
         signing_secret_key_rsa);
   fclose(signing_secret_key_rsa);
 
-  // read public id key
-
+  // read secret id key (again)
   FILE *signing_secret_key = fopen(
       "/home/foxmoss/Projects/TorVPN/keys/ed25519_signing_secret_key", "rb");
 
@@ -201,6 +200,17 @@ int main() {
   std::vector<uint8_t> public_key;
   public_key.insert(public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
   crypto_sign_ed25519_sk_to_pk(public_key.data(), secret_key.data());
+
+  // read ntor key
+  FILE *signing_ntor_key =
+      fopen("/home/foxmoss/Projects/TorVPN/keys/secret_onion_key_ntor", "rb");
+
+  fseek(signing_ntor_key, 0x20, SEEK_SET);
+
+  std::vector<uint8_t> ntor_key;
+  ntor_key.insert(ntor_key.end(), 64, 0);
+  fread(ntor_key.data(), 1, 64, signing_ntor_key);
+  fclose(signing_ntor_key);
 
   // get responder x509
   const mbedtls_x509_crt *responder_cert = mbedtls_ssl_get_peer_cert(&ssl);
@@ -220,7 +230,8 @@ int main() {
 
   TorConnection connection(cert->cert, public_key, cert->link_secret_key,
                            cert->link_public_key, my_addr_raw, other_addr_raw,
-                           secret_key_rsa, responder_data, keying_material);
+                           secret_key_rsa, responder_data, keying_material,
+                           ntor_key);
 
   std::vector<uint8_t> send_buffer = {};
   std::vector<uint8_t> initiator_log = {};
