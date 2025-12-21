@@ -65,8 +65,7 @@ std::optional<LinkKeys> create_link_cert() {
 
   crypto_sign_keypair(link_public_key, link_secret_key);
 
-  FILE *signing_secret_key = fopen(
-      "/home/foxmoss/Projects/TorVPN/keys/ed25519_signing_secret_key", "rb");
+  FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
 
   fseek(signing_secret_key, 0x20, SEEK_SET);
 
@@ -79,7 +78,8 @@ std::optional<LinkKeys> create_link_cert() {
   cert.push_back(
       0x06); // Ed25519 authentication key signed with ed25519 signing key
 
-  uint32_t expiration = 37313477; // this impl will stop working in 2030
+  uint32_t expiration =
+      (time(NULL) + 86400) / (3600); // this impl will stop working in 2030
   expiration = htonl(expiration);
   cert.insert(cert.end(), (uint8_t *)&expiration,
               (uint8_t *)&expiration + sizeof(uint32_t));
@@ -166,15 +166,14 @@ int main() {
   inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
   uint32_t other_addr_raw = other_addr.s_addr;
 
-  std::string my_addr_str = "73.24.22.153";
+  std::string my_addr_str = "205.185.125.167";
 
   struct in_addr my_addr;
   inet_pton(AF_INET, my_addr_str.c_str(), &my_addr);
   uint32_t my_addr_raw = my_addr.s_addr;
 
   // read rsa keys
-  FILE *signing_secret_key_rsa =
-      fopen("/home/foxmoss/Projects/TorVPN/keys/secret_id_key", "rb");
+  FILE *signing_secret_key_rsa = fopen("../keys/secret_id_key", "rb");
 
   fseek(signing_secret_key_rsa, 0, SEEK_END);
   size_t signing_secret_key_rsa_len = ftell(signing_secret_key_rsa);
@@ -187,8 +186,7 @@ int main() {
   fclose(signing_secret_key_rsa);
 
   // read secret id key (again)
-  FILE *signing_secret_key = fopen(
-      "/home/foxmoss/Projects/TorVPN/keys/ed25519_signing_secret_key", "rb");
+  FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
 
   fseek(signing_secret_key, 0x20, SEEK_SET);
 
@@ -202,8 +200,7 @@ int main() {
   crypto_sign_ed25519_sk_to_pk(public_key.data(), secret_key.data());
 
   // read ntor key
-  FILE *signing_ntor_key =
-      fopen("/home/foxmoss/Projects/TorVPN/keys/secret_onion_key_ntor", "rb");
+  FILE *signing_ntor_key = fopen("../keys/secret_onion_key_ntor", "rb");
 
   fseek(signing_ntor_key, 0x20, SEEK_SET);
 

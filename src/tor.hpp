@@ -80,9 +80,10 @@ public:
     psa_crypto_init();
     mbedtls_sha1_init(&sha1_ctx);
 
-    ntor_public_key.insert(ntor_public_key.end(), crypto_sign_PUBLICKEYBYTES,
+    ntor_public_key.insert(ntor_public_key.end(), crypto_scalarmult_SCALARBYTES,
                            0);
-    crypto_sign_ed25519_sk_to_pk(ntor_public_key.data(), secret_ntor.data());
+    crypto_scalarmult_curve25519_base(ntor_public_key.data(),
+                                      secret_ntor.data());
   }
   ~TorConnection() {
     mbedtls_entropy_free(&entropy);
