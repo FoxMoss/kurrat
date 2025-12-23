@@ -1,9 +1,17 @@
+#include "mbedtls/md.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/sha256.h"
 #include "mbedtls/x509.h"
+#include "mbedtls/x509_crt.h"
 #include "tor.hpp"
 #include <arpa/inet.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <iostream>
 #include <linux/tls.h>
+#include <locale>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>
@@ -24,7 +32,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utility>
 #include <vector>
 
 void tls_key_export_callback(void *p_expkey, mbedtls_ssl_key_export_type type,
@@ -59,6 +66,230 @@ struct LinkKeys {
   std::vector<uint8_t> link_public_key, link_secret_key, cert;
 };
 
+std::vector<uint8_t> create_cross_cert(void *ctr_drbg) {
+
+  mbedtls_pk_context id_pk;
+  mbedtls_pk_init(&id_pk);
+  mbedtls_pk_parse_keyfile(&id_pk, "../keys/secret_id_key", "",
+                           mbedtls_ctr_drbg_random, ctr_drbg);
+
+  FILE *master_id_secret_key =
+      fopen("../keys/ed25519_master_id_secret_key", "rb");
+
+  fseek(master_id_secret_key, 0x20, SEEK_SET);
+
+  std::vector<uint8_t> master_id_secret_key_raw;
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(),
+                                  crypto_sign_SECRETKEYBYTES, 0);
+  fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key);
+  fclose(master_id_secret_key);
+
+  std::vector<uint8_t> id_public_key;
+  id_public_key.insert(id_public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
+
+  crypto_sign_ed25519_sk_to_pk(id_public_key.data(),
+                               master_id_secret_key_raw.data());
+
+  std::vector<uint8_t> cert;
+  cert.insert(cert.end(), id_public_key.begin(), id_public_key.end());
+
+  uint32_t expiration = (time(NULL) + 86400) / (3600);
+  expiration = htonl(expiration);
+  cert.insert(cert.end(), (uint8_t *)&expiration,
+              (uint8_t *)&expiration + sizeof(uint32_t));
+
+  std::string prefix = "Tor TLS RSA/Ed25519 cross-certificate";
+  std::vector<uint8_t> signing_object;
+  signing_object.insert(signing_object.end(), prefix.begin(), prefix.end());
+  signing_object.insert(signing_object.end(), cert.begin(), cert.end());
+
+  unsigned char hash[32];
+  mbedtls_md_context_t md_ctx;
+  mbedtls_md_init(&md_ctx);
+  mbedtls_md_setup(&md_ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 0);
+  mbedtls_md_starts(&md_ctx);
+  mbedtls_md_update(&md_ctx, signing_object.data(), signing_object.size());
+  mbedtls_md_finish(&md_ctx, hash);
+  mbedtls_md_free(&md_ctx);
+
+  FILE *signing_object_file = fopen("signing_object.log", "w");
+  fwrite(hash, 32, 1, signing_object_file);
+  fclose(signing_object_file);
+
+  uint8_t signature_raw[MBEDTLS_PK_SIGNATURE_MAX_SIZE];
+  size_t signature_raw_len;
+  mbedtls_rsa_context *rsa = mbedtls_pk_rsa(id_pk);
+
+  mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
+
+  mbedtls_rsa_pkcs1_sign(rsa, mbedtls_ctr_drbg_random, ctr_drbg,
+                         MBEDTLS_MD_NONE, 32, hash, signature_raw);
+  signature_raw_len = mbedtls_pk_get_len(&id_pk);
+
+  // todo remove this
+  printf("verified %i\n", mbedtls_rsa_pkcs1_verify(rsa, MBEDTLS_MD_NONE, 32,
+                                                   hash, signature_raw));
+
+  std::vector<uint8_t> signature;
+  signature.insert(signature.end(), signature_raw,
+                   signature_raw + signature_raw_len);
+
+  cert.push_back((uint8_t)signature_raw_len);
+  cert.insert(cert.end(), signature.begin(), signature.end());
+
+  return cert;
+}
+
+std::vector<uint8_t> create_rsa_id_cert(void *ctr_drbg) {
+  mbedtls_pk_context id_pk;
+  mbedtls_pk_init(&id_pk);
+  mbedtls_pk_parse_keyfile(&id_pk, "../keys/secret_id_key", "",
+                           mbedtls_ctr_drbg_random, ctr_drbg);
+
+  mbedtls_x509write_cert cert;
+  mbedtls_x509write_crt_init(&cert);
+
+  mbedtls_x509write_crt_set_subject_key(&cert, &id_pk);
+  mbedtls_x509write_crt_set_issuer_key(&cert, &id_pk);
+
+  mbedtls_x509write_crt_set_version(&cert, MBEDTLS_X509_CRT_VERSION_3);
+
+  mbedtls_mpi serial;
+  mbedtls_mpi_init(&serial);
+  // 2000 is just some number, set_serial is deprecated so we should switch this
+  // out if we want the code to be pretty
+  mbedtls_mpi_lset(&serial, 2000);
+  mbedtls_x509write_crt_set_serial(&cert, &serial);
+  mbedtls_mpi_free(&serial);
+
+  // jank bad utc time calculator because not debugging validity timestamps
+  auto now = std::chrono::utc_clock::now();
+  auto expires = now + std::chrono::utc_seconds::duration(60 * 60 * 24 * 365);
+  auto before = now - std::chrono::utc_seconds::duration(60 * 60 * 24 * 365);
+  std::string expires_str = std::format("{:%Y}1231235959", expires);
+  std::string before_str = std::format("{:%Y}1231235959", before);
+
+  mbedtls_x509write_crt_set_validity(&cert, before_str.c_str(),
+                                     expires_str.c_str());
+
+  mbedtls_x509write_crt_set_md_alg(&cert, MBEDTLS_MD_SHA256);
+  mbedtls_x509write_crt_set_issuer_name(&cert, "C=US,O=FOX,CN=FoxMoss");
+  mbedtls_x509write_crt_set_subject_name(&cert, "C=US,O=FOX,CN=FoxMoss");
+
+  uint8_t der_buf[4096];
+  int der_len = mbedtls_x509write_crt_der(&cert, der_buf, 4096,
+                                          mbedtls_ctr_drbg_random, ctr_drbg);
+
+  std::vector<uint8_t> der;
+  der.insert(der.end(), (uint8_t *)der_buf + (4096 - der_len),
+             (uint8_t *)der_buf + 4096);
+
+  mbedtls_x509write_crt_free(&cert);
+  mbedtls_pk_free(&id_pk);
+
+  return der;
+}
+
+std::vector<uint8_t> create_id_cert() {
+  // signing key
+  FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
+
+  fseek(signing_secret_key, 0x20, SEEK_SET);
+
+  uint8_t signing_secret_key_raw[64];
+  fread(signing_secret_key_raw, 1, 64, signing_secret_key);
+  fclose(signing_secret_key);
+
+  std::vector<uint8_t> signing_public_key;
+  signing_public_key.insert(signing_public_key.end(),
+                            crypto_sign_PUBLICKEYBYTES, 0);
+  crypto_sign_ed25519_sk_to_pk(signing_public_key.data(),
+                               signing_secret_key_raw);
+
+  // relay id key
+
+  FILE *master_id_secret_key =
+      fopen("../keys/ed25519_master_id_secret_key", "rb");
+
+  fseek(master_id_secret_key, 0x20, SEEK_SET);
+
+  std::vector<uint8_t> master_id_secret_key_raw;
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(),
+                                  crypto_sign_SECRETKEYBYTES, 0);
+  fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key);
+  fclose(master_id_secret_key);
+
+  std::vector<uint8_t> id_public_key;
+  id_public_key.insert(id_public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
+
+  crypto_sign_ed25519_sk_to_pk(id_public_key.data(),
+                               master_id_secret_key_raw.data());
+
+  // gen that cert
+
+  std::vector<uint8_t> cert;
+  cert.push_back(1);    // version
+  cert.push_back(0x04); // IDENTITY_V_SIGNING
+
+  uint32_t expiration = (time(NULL) + 86400) / (3600);
+  expiration = htonl(expiration);
+  cert.insert(cert.end(), (uint8_t *)&expiration,
+              (uint8_t *)&expiration + sizeof(uint32_t));
+
+  cert.push_back(0x01); // certified ed25519
+
+  cert.insert(cert.end(), signing_public_key.begin(), signing_public_key.end());
+
+  cert.push_back(0x01); // 1 ext
+
+  uint16_t ext_len = htons(32);
+  cert.insert(cert.end(), (uint8_t *)&ext_len,
+              (uint8_t *)&ext_len + sizeof(uint16_t));
+
+  cert.push_back(0x04); // Signed-with-ed25519-key extension
+  cert.push_back(0x01); // yes effects validation
+
+  cert.insert(cert.end(), id_public_key.begin(), id_public_key.end());
+
+  unsigned char signature[crypto_sign_BYTES];
+  crypto_sign_detached(signature, NULL, cert.data(), cert.size(),
+                       master_id_secret_key_raw.data());
+
+  cert.insert(cert.end(), signature, signature + crypto_sign_BYTES);
+
+  return cert;
+}
+
+std::vector<uint8_t> create_tls_cert(std::vector<uint8_t> subject) {
+  FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
+
+  fseek(signing_secret_key, 0x20, SEEK_SET);
+
+  uint8_t secret_key[64];
+  fread(secret_key, 1, 64, signing_secret_key);
+  fclose(signing_secret_key);
+
+  std::vector<uint8_t> cert;
+  cert.push_back(1);    // version
+  cert.push_back(0x05); // A TLS certificate signed with ed25519 signing key
+
+  uint32_t expiration = (time(NULL) + 86400) / (3600);
+  expiration = htonl(expiration);
+  cert.insert(cert.end(), (uint8_t *)&expiration,
+              (uint8_t *)&expiration + sizeof(uint32_t));
+
+  cert.push_back(0x03); // SHA256 hash of an X.509 certificate
+
+  cert.insert(cert.end(), subject.begin(), subject.end());
+
+  unsigned char signature[crypto_sign_BYTES];
+  crypto_sign_detached(signature, NULL, cert.data(), cert.size(), secret_key);
+
+  cert.insert(cert.end(), signature, signature + crypto_sign_BYTES);
+
+  return cert;
+}
+
 std::optional<LinkKeys> create_link_cert() {
   uint8_t link_public_key[32];
   uint8_t link_secret_key[64];
@@ -78,8 +309,7 @@ std::optional<LinkKeys> create_link_cert() {
   cert.push_back(
       0x06); // Ed25519 authentication key signed with ed25519 signing key
 
-  uint32_t expiration =
-      (time(NULL) + 86400) / (3600); // this impl will stop working in 2030
+  uint32_t expiration = (time(NULL) + 86400) / (3600);
   expiration = htonl(expiration);
   cert.insert(cert.end(), (uint8_t *)&expiration,
               (uint8_t *)&expiration + sizeof(uint32_t));
@@ -122,8 +352,7 @@ int main() {
   mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                         (const unsigned char *)"client", 6);
 
-  mbedtls_net_connect(&server_ctx, "23.191.200.26", "443",
-                      MBEDTLS_NET_PROTO_TCP);
+  mbedtls_net_connect(&server_ctx, "127.0.0.1", "9001", MBEDTLS_NET_PROTO_TCP);
 
   mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
                               MBEDTLS_SSL_TRANSPORT_STREAM,
@@ -157,16 +386,14 @@ int main() {
     return -1;
   }
 
-  auto cert = create_link_cert();
-
   // reduce size format of ip addresses
-  std::string other_addr_str = "23.191.200.26";
+  std::string other_addr_str = "127.0.0.1";
 
   struct in_addr other_addr;
   inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
   uint32_t other_addr_raw = other_addr.s_addr;
 
-  std::string my_addr_str = "205.185.125.167";
+  std::string my_addr_str = "73.24.22.153";
 
   struct in_addr my_addr;
   inet_pton(AF_INET, my_addr_str.c_str(), &my_addr);
@@ -215,6 +442,11 @@ int main() {
   responder_data.insert(responder_data.end(), responder_cert->raw.p,
                         responder_cert->raw.p + responder_cert->raw.len);
 
+  std::vector<uint8_t> responder_cert_hash;
+  responder_cert_hash.insert(responder_cert_hash.end(), 32, 0);
+  mbedtls_sha256(responder_data.data(), responder_data.size(),
+                 responder_cert_hash.data(), 0);
+
   // keying_material
   std::vector<uint8_t> keying_material;
   keying_material.insert(keying_material.end(), 32, 0);
@@ -223,12 +455,32 @@ int main() {
       &ssl, keying_material.data(), 32, label.c_str(), label.size(),
       public_key.data(), public_key.size(), true);
 
+  // IDENTITY_V_SIGNING
+  auto id_cert = create_id_cert();
+
+  // SIGNING_V_TLS_CERT
+  auto tls_cert = create_tls_cert(responder_cert_hash);
+
+  // SIGNING_V_LINK_AUTH
+  auto link_cert = create_link_cert();
+
+  // RSA_ID_X509
+  auto rsa_id_cert = create_rsa_id_cert(&ctr_drbg);
+
+  // RSA_ID_V_IDENTITY
+  auto cross_cert = create_cross_cert(&ctr_drbg);
+
   // start the tor connection
 
-  TorConnection connection(cert->cert, public_key, cert->link_secret_key,
-                           cert->link_public_key, my_addr_raw, other_addr_raw,
-                           secret_key_rsa, responder_data, keying_material,
-                           ntor_key);
+  TorConnection connection({{0x04, id_cert},
+                            {0x06, link_cert->cert},
+                            /*{0x05, tls_cert},*/
+                            {0x02, rsa_id_cert},
+                            {0x07, cross_cert}},
+                           public_key, link_cert->link_secret_key,
+                           link_cert->link_public_key, my_addr_raw,
+                           other_addr_raw, secret_key_rsa, responder_data,
+                           keying_material, ntor_key);
 
   std::vector<uint8_t> send_buffer = {};
   std::vector<uint8_t> initiator_log = {};
@@ -246,6 +498,20 @@ int main() {
   int size;
   FILE *log_file = fopen("out.log", "w");
   while (true) {
+    if (!read_buffer.empty()) {
+      connection.parse_cell(read_buffer, send_buffer, initiator_log);
+
+      if (!send_buffer.empty()) {
+
+        printf("writing! %zu \n", send_buffer.size());
+        mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+
+        fwrite(send_buffer.data(), send_buffer.size(), 1, from_me);
+        fflush(from_me);
+        send_buffer.clear();
+      }
+    }
+
     unsigned char buf[256];
 
     size = mbedtls_ssl_read(&ssl, buf, 256);
@@ -262,17 +528,6 @@ int main() {
     printf("read! %i \n", size);
 
     read_buffer.insert(read_buffer.end(), buf, buf + size);
-    connection.parse_cell(read_buffer, send_buffer, initiator_log);
-
-    if (!send_buffer.empty()) {
-
-      printf("writing! %zu \n", send_buffer.size());
-      mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
-
-      fwrite(send_buffer.data(), send_buffer.size(), 1, from_me);
-      fflush(from_me);
-      send_buffer.clear();
-    }
 
     fwrite(buf, size, 1, log_file);
     fflush(log_file);

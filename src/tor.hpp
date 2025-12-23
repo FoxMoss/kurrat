@@ -44,19 +44,18 @@
 class TorConnection {
 
 public:
-  TorConnection(std::vector<uint8_t> my_cert,
-                std::vector<uint8_t> local_KP_relayid_ed,
-                std::vector<uint8_t> link_secret_key,
-                std::vector<uint8_t> link_public_key, uint32_t my_addr,
-                uint32_t other_addr, std::vector<uint8_t> rsa_secret_key,
-                std::vector<uint8_t> responder_cert,
-                std::vector<uint8_t> keying_material,
-                std::vector<uint8_t> secret_ntor)
-      : local_KP_relayid_ed(local_KP_relayid_ed),
+  TorConnection(
+      std::vector<std::pair<uint8_t, std::vector<uint8_t>>> local_certs,
+      std::vector<uint8_t> local_KP_relayid_ed,
+      std::vector<uint8_t> link_secret_key,
+      std::vector<uint8_t> link_public_key, uint32_t my_addr,
+      uint32_t other_addr, std::vector<uint8_t> rsa_secret_key,
+      std::vector<uint8_t> responder_cert, std::vector<uint8_t> keying_material,
+      std::vector<uint8_t> secret_ntor)
+      : local_KP_relayid_ed(local_KP_relayid_ed), local_certs(local_certs),
         responder_cert(responder_cert), link_secret_key(link_secret_key),
         link_public_key(link_public_key), my_addr(htonl(my_addr)),
         other_addr(htonl(other_addr)), secret_ntor(secret_ntor) {
-    local_certs.push_back({0x06, my_cert});
 
     mbedtls_pk_init(&rsa_pk);
     mbedtls_ctr_drbg_init(&ctr_drbg);
@@ -178,8 +177,8 @@ public:
           generate_authenticate_cell(send_buffer, initiator_log);
           generate_netinfo_cell(send_buffer);
 
+          generate_create2_cell(send_buffer, 0b1000000000000010);
           // generate_create2_cell(send_buffer, 0x8001);
-          generate_create2_cell(send_buffer, 0x0001);
           // generate_begin_relay_cell(send_buffer, 22, 22, "foxmoss.com:80",
           // 0);
         }
@@ -534,14 +533,12 @@ private:
 
   void generate_cert_cell(std::vector<uint8_t> &send_buffer) {
     std::vector<uint8_t> data = {};
-    data.push_back(1); // one cert!
+    data.push_back(local_certs.size()); // cert count
 
     for (auto cert : local_certs) {
-      // first cert
-      data.push_back(cert.first); // one cert!
+      data.push_back(cert.first);
 
-      uint16_t cert_len = cert.second.size();
-      cert_len = htons(cert_len);
+      uint16_t cert_len = htons(cert.second.size());
 
       data.insert(data.end(), (uint8_t *)&cert_len,
                   (uint8_t *)&cert_len + sizeof(uint16_t));
@@ -591,6 +588,8 @@ private:
   std::vector<uint8_t> ntor_public_key;
   void generate_create2_cell(std::vector<uint8_t> &return_buffer,
                              uint16_t circuit_id) {
+    size_t cursor = return_buffer.size();
+
     std::vector<uint8_t> data = {};
     uint16_t htype = htons(0x0002);
     data.insert(data.end(), (uint8_t *)&htype,
@@ -602,7 +601,7 @@ private:
     std::vector<uint8_t> identity_digest;
     identity_digest.insert(identity_digest.end(), 20, 0);
 
-    std::string identity_b64 = "UTn5b9ue3RAztREWSlkNXavQ/gI";
+    std::string identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
     add_padding_b64(identity_b64);
     size_t identity_len;
     mbedtls_base64_decode(
@@ -620,7 +619,7 @@ private:
     //
     std::vector<uint8_t> remote_ntor_pub_key;
     remote_ntor_pub_key.insert(remote_ntor_pub_key.end(), 32, 0);
-    std::string remote_ntor_b64 = "VBPBxxdEhFqhXgkSTn918UvEewMamhoPjZvMQzEe+2o";
+    std::string remote_ntor_b64 = "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
     add_padding_b64(remote_ntor_b64);
     size_t remote_ntor_len;
     mbedtls_base64_decode(
@@ -664,6 +663,20 @@ private:
     data.insert(data.end(), handshake_data.begin(), handshake_data.end());
 
     generate_cell_fixed(return_buffer, circuit_id, 10, data);
+
+    printf("CREATE2 cell total size: %zu\n", return_buffer.size());
+    printf("Circuit ID bytes: %02x %02x\n", return_buffer[cursor],
+           return_buffer[cursor + 1]);
+    printf("Command byte: %02x (should be 0a)\n", return_buffer[cursor + 2]);
+    printf("HTYPE: %02x %02x (should be 00 02)\n", return_buffer[cursor + 3],
+           return_buffer[cursor + 4]);
+    printf("HLEN: %02x %02x\n", return_buffer[cursor + 5],
+           return_buffer[cursor + 6]);
+    printf("First few handshake bytes: ");
+    for (int i = 7; i < 17 && i < return_buffer.size() - cursor; i++) {
+      printf("%02x ", return_buffer[cursor + i]);
+    }
+    printf("\n");
   }
 
   mbedtls_sha1_context sha1_ctx;
