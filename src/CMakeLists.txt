@@ -10,10 +10,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(mbedtls)
 
-add_compile_options(-std=c++23)
+# add_compile_options(-std=c++23)
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++23")
 
 add_executable(torvpn
  main.cpp
+ donna/ed25519_tor.c
 )
 
 target_link_libraries(torvpn mbedtls sodium)

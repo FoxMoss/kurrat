@@ -1,4 +1,7 @@
 #pragma once
+extern "C" {
+#include "donna/ed25519_donna_tor.h"
+}
 #include "mbedtls/base64.h"
 #include "mbedtls/bignum.h"
 #include "mbedtls/ecdh.h"
@@ -509,12 +512,11 @@ private:
       auth_buffer.insert(auth_buffer.end(), random_buf.begin(),
                          random_buf.end());
 
-      unsigned char signature[crypto_sign_BYTES];
-      crypto_sign_detached(signature, NULL, auth_buffer.data(),
-                           auth_buffer.size(), link_secret_key.data());
+      unsigned char signature[64];
+      ed25519_donna_sign(signature, auth_buffer.data(), auth_buffer.size(),
+                         link_secret_key.data(), link_public_key.data());
 
-      auth_buffer.insert(auth_buffer.end(), signature,
-                         signature + crypto_sign_BYTES);
+      auth_buffer.insert(auth_buffer.end(), signature, signature + 64);
 
       // put in buffer
       uint16_t auth_length = auth_buffer.size();

@@ -1,3 +1,6 @@
+extern "C" {
+#include "donna/ed25519_donna_tor.h"
+}
 #include "mbedtls/md.h"
 #include "mbedtls/pk.h"
 #include "mbedtls/sha256.h"
@@ -22,9 +25,6 @@
 #include <mbedtls/ssl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <sodium.h>
-#include <sodium/crypto_sign.h>
-#include <sodium/crypto_sign_ed25519.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +43,6 @@ void tls_key_export_callback(void *p_expkey, mbedtls_ssl_key_export_type type,
   static FILE *keylog_file;
   if (keylog_file == nullptr) {
     keylog_file = fopen("sslkeylog.txt", "w");
-    return;
   }
 
   fprintf(keylog_file, "CLIENT_RANDOM ");
@@ -79,16 +78,14 @@ std::vector<uint8_t> create_cross_cert(void *ctr_drbg) {
   fseek(master_id_secret_key, 0x20, SEEK_SET);
 
   std::vector<uint8_t> master_id_secret_key_raw;
-  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(),
-                                  crypto_sign_SECRETKEYBYTES, 0);
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(), 64, 0);
   fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key);
   fclose(master_id_secret_key);
 
   std::vector<uint8_t> id_public_key;
-  id_public_key.insert(id_public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
+  id_public_key.insert(id_public_key.end(), 32, 0);
 
-  crypto_sign_ed25519_sk_to_pk(id_public_key.data(),
-                               master_id_secret_key_raw.data());
+  ed25519_donna_pubkey(id_public_key.data(), master_id_secret_key_raw.data());
 
   std::vector<uint8_t> cert;
   cert.insert(cert.end(), id_public_key.begin(), id_public_key.end());
@@ -125,10 +122,6 @@ std::vector<uint8_t> create_cross_cert(void *ctr_drbg) {
   mbedtls_rsa_pkcs1_sign(rsa, mbedtls_ctr_drbg_random, ctr_drbg,
                          MBEDTLS_MD_NONE, 32, hash, signature_raw);
   signature_raw_len = mbedtls_pk_get_len(&id_pk);
-
-  // todo remove this
-  printf("verified %i\n", mbedtls_rsa_pkcs1_verify(rsa, MBEDTLS_MD_NONE, 32,
-                                                   hash, signature_raw));
 
   std::vector<uint8_t> signature;
   signature.insert(signature.end(), signature_raw,
@@ -201,10 +194,8 @@ std::vector<uint8_t> create_id_cert() {
   fclose(signing_secret_key);
 
   std::vector<uint8_t> signing_public_key;
-  signing_public_key.insert(signing_public_key.end(),
-                            crypto_sign_PUBLICKEYBYTES, 0);
-  crypto_sign_ed25519_sk_to_pk(signing_public_key.data(),
-                               signing_secret_key_raw);
+  signing_public_key.insert(signing_public_key.end(), 32, 0);
+  ed25519_donna_pubkey(signing_public_key.data(), signing_secret_key_raw);
 
   // relay id key
 
@@ -214,16 +205,14 @@ std::vector<uint8_t> create_id_cert() {
   fseek(master_id_secret_key, 0x20, SEEK_SET);
 
   std::vector<uint8_t> master_id_secret_key_raw;
-  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(),
-                                  crypto_sign_SECRETKEYBYTES, 0);
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(), 64, 0);
   fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key);
   fclose(master_id_secret_key);
 
   std::vector<uint8_t> id_public_key;
-  id_public_key.insert(id_public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
+  id_public_key.insert(id_public_key.end(), 32, 0);
 
-  crypto_sign_ed25519_sk_to_pk(id_public_key.data(),
-                               master_id_secret_key_raw.data());
+  ed25519_donna_pubkey(id_public_key.data(), master_id_secret_key_raw.data());
 
   // gen that cert
 
@@ -251,11 +240,18 @@ std::vector<uint8_t> create_id_cert() {
 
   cert.insert(cert.end(), id_public_key.begin(), id_public_key.end());
 
-  unsigned char signature[crypto_sign_BYTES];
-  crypto_sign_detached(signature, NULL, cert.data(), cert.size(),
-                       master_id_secret_key_raw.data());
+  unsigned char signature[64];
+  ed25519_donna_sign(signature, cert.data(), cert.size(),
+                     master_id_secret_key_raw.data(), id_public_key.data());
 
-  cert.insert(cert.end(), signature, signature + crypto_sign_BYTES);
+  // todo rm ts
+  int a = ed25519_donna_open(signature, cert.data(), cert.size(),
+                             id_public_key.data());
+  if (a < 0) {
+    printf("boooo\n");
+  }
+
+  cert.insert(cert.end(), signature, signature + 64);
 
   return cert;
 }
@@ -268,6 +264,11 @@ std::vector<uint8_t> create_tls_cert(std::vector<uint8_t> subject) {
   uint8_t secret_key[64];
   fread(secret_key, 1, 64, signing_secret_key);
   fclose(signing_secret_key);
+
+  std::vector<uint8_t> signing_public_key;
+  signing_public_key.insert(signing_public_key.end(), 32, 0);
+
+  ed25519_donna_pubkey(signing_public_key.data(), secret_key);
 
   std::vector<uint8_t> cert;
   cert.push_back(1);    // version
@@ -282,19 +283,22 @@ std::vector<uint8_t> create_tls_cert(std::vector<uint8_t> subject) {
 
   cert.insert(cert.end(), subject.begin(), subject.end());
 
-  unsigned char signature[crypto_sign_BYTES];
-  crypto_sign_detached(signature, NULL, cert.data(), cert.size(), secret_key);
+  unsigned char signature[64];
+  ed25519_donna_sign(signature, cert.data(), cert.size(), secret_key,
+                     signing_public_key.data());
 
-  cert.insert(cert.end(), signature, signature + crypto_sign_BYTES);
+  cert.insert(cert.end(), signature, signature + 64);
 
   return cert;
 }
 
 std::optional<LinkKeys> create_link_cert() {
   uint8_t link_public_key[32];
+  uint8_t link_secret_key_bad[32];
   uint8_t link_secret_key[64];
 
-  crypto_sign_keypair(link_public_key, link_secret_key);
+  ed25519_donna_keygen(link_public_key, link_secret_key);
+  ed25519_donna_seckey_expand(link_secret_key, link_secret_key_bad);
 
   FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
 
@@ -303,6 +307,11 @@ std::optional<LinkKeys> create_link_cert() {
   uint8_t secret_key[64];
   fread(secret_key, 1, 64, signing_secret_key);
   fclose(signing_secret_key);
+
+  std::vector<uint8_t> signing_public_key;
+  signing_public_key.insert(signing_public_key.end(), 32, 0);
+
+  ed25519_donna_pubkey(signing_public_key.data(), secret_key);
 
   std::vector<uint8_t> cert;
   cert.push_back(1); // version
@@ -319,10 +328,18 @@ std::optional<LinkKeys> create_link_cert() {
 
   cert.push_back(0x00); // no extensions
 
-  unsigned char signature[crypto_sign_BYTES];
-  crypto_sign_detached(signature, NULL, cert.data(), cert.size(), secret_key);
+  unsigned char signature[64];
+  ed25519_donna_sign(signature, cert.data(), cert.size(), secret_key,
+                     signing_public_key.data());
 
-  cert.insert(cert.end(), signature, signature + crypto_sign_BYTES);
+  // todo rm ts
+  int a = ed25519_donna_open(signature, cert.data(), cert.size(),
+                             signing_public_key.data());
+  if (a < 0) {
+    printf("boooo\n");
+  }
+
+  cert.insert(cert.end(), signature, signature + 64);
 
   std::vector<uint8_t> link_public_key_v, link_secret_key_v;
   link_public_key_v.insert(link_public_key_v.end(), link_public_key,
@@ -379,13 +396,6 @@ int main() {
   }
   mbedtls_net_set_nonblock(&server_ctx);
 
-  // generate auth cert now
-
-  if (sodium_init() == -1) {
-    printf("FATAL ERROR: Sodium init failed \n");
-    return -1;
-  }
-
   // reduce size format of ip addresses
   std::string other_addr_str = "127.0.0.1";
 
@@ -423,8 +433,8 @@ int main() {
   fclose(signing_secret_key);
 
   std::vector<uint8_t> public_key;
-  public_key.insert(public_key.end(), crypto_sign_PUBLICKEYBYTES, 0);
-  crypto_sign_ed25519_sk_to_pk(public_key.data(), secret_key.data());
+  public_key.insert(public_key.end(), 32, 0);
+  ed25519_donna_pubkey(public_key.data(), secret_key.data());
 
   // read ntor key
   FILE *signing_ntor_key = fopen("../keys/secret_onion_key_ntor", "rb");
