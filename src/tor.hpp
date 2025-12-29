@@ -1,4 +1,6 @@
 #pragma once
+#include "mbedtls/md.h"
+#include <unordered_map>
 extern "C" {
 #include "donna/ed25519_donna_tor.h"
 }
@@ -54,11 +56,16 @@ public:
       std::vector<uint8_t> link_public_key, uint32_t my_addr,
       uint32_t other_addr, std::vector<uint8_t> rsa_secret_key,
       std::vector<uint8_t> responder_cert, std::vector<uint8_t> keying_material,
-      std::vector<uint8_t> secret_ntor)
+      std::vector<uint8_t> secret_ntor,
+      std::vector<uint8_t> remote_identity_digest,
+      std::vector<uint8_t> remote_ntor_pub_key)
       : local_KP_relayid_ed(local_KP_relayid_ed), local_certs(local_certs),
-        responder_cert(responder_cert), link_secret_key(link_secret_key),
-        link_public_key(link_public_key), my_addr(htonl(my_addr)),
-        other_addr(htonl(other_addr)), secret_ntor(secret_ntor) {
+        responder_cert(responder_cert), keying_material(keying_material),
+        link_secret_key(link_secret_key), link_public_key(link_public_key),
+        my_addr(htonl(my_addr)), other_addr(htonl(other_addr)),
+        secret_ntor(secret_ntor),
+        remote_identity_digest(remote_identity_digest),
+        remote_ntor_pub_key(remote_ntor_pub_key) {
 
     mbedtls_pk_init(&rsa_pk);
     mbedtls_ctr_drbg_init(&ctr_drbg);
@@ -71,8 +78,8 @@ public:
                          NULL, 0, mbedtls_ctr_drbg_random, &ctr_drbg);
 
     uint8_t der_buf[4096];
-    int der_len =
-        mbedtls_pk_write_pubkey_der(&rsa_pk, der_buf, sizeof(der_buf));
+    uint8_t *der_buf_cursor = der_buf + 4096;
+    int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &rsa_pk);
 
     printf("%s\n", der_buf + (4096 - der_len));
 
@@ -86,11 +93,21 @@ public:
                            0);
     crypto_scalarmult_curve25519_base(ntor_public_key.data(),
                                       secret_ntor.data());
+
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
   }
   ~TorConnection() {
+    mbedtls_ecp_group_free(&grp);
+
     mbedtls_entropy_free(&entropy);
     mbedtls_ctr_drbg_free(&ctr_drbg);
     mbedtls_pk_free(&rsa_pk);
+
+    if (generated_circuit) {
+      mbedtls_mpi_free(&circuit_priv_key);
+      mbedtls_ecp_point_free(&circuit_pub_key);
+    }
   }
 
   void generate_versions_cell(std::vector<uint8_t> &return_buffer) {
@@ -189,7 +206,9 @@ public:
         break;
       }
       case 11: {
-        printf("read CREATED2\n");
+        auto created_buffer = payload.value();
+        uint64_t created_cursor = 0;
+        parse_created(created_buffer, created_cursor);
         break;
       }
       }
@@ -318,9 +337,9 @@ private:
     mbedtls_x509_crt_parse(&crt, cert_rsa_buffer.data(),
                            cert_rsa_buffer.size());
     uint8_t der_buf[4096];
+    uint8_t *der_buf_cursor = der_buf + 4096;
     // tf do we write to the end???
-    int der_len =
-        mbedtls_pk_write_pubkey_der(&crt.pk, der_buf, sizeof(der_buf));
+    int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &crt.pk);
     mbedtls_x509_crt_free(&crt);
 
     FILE *rsa_file = fopen("rsa.log", "w");
@@ -442,6 +461,103 @@ private:
 
     return true;
   }
+
+  void parse_created(std::vector<uint8_t> &created_buffer, uint64_t &cursor) {
+    parse_uint16(created_buffer, cursor); // hanshake len
+
+    auto server_circuit_key_public_raw =
+        parse_fixed_buffer(created_buffer, cursor, 32);
+
+    mbedtls_mpi circuit_shared_secret;
+
+    mbedtls_ecp_point server_circuit_key_public;
+    mbedtls_ecp_point_init(&server_circuit_key_public);
+
+    mbedtls_ecp_point_read_binary(&grp, &server_circuit_key_public,
+                                  server_circuit_key_public_raw->data(),
+                                  server_circuit_key_public_raw->size());
+
+    mbedtls_ecdh_compute_shared(&grp, &circuit_shared_secret,
+                                &server_circuit_key_public, &circuit_priv_key,
+                                mbedtls_ctr_drbg_random, &ctr_drbg);
+
+    std::vector<uint8_t> circuit_shared_secret_bytes;
+    circuit_shared_secret_bytes.insert(circuit_shared_secret_bytes.end(), 32,
+                                       0);
+    mbedtls_mpi_write_binary(&circuit_shared_secret,
+                             circuit_shared_secret_bytes.data(), 32);
+
+    mbedtls_mpi ntor_shared_secret;
+
+    mbedtls_ecp_point server_ntor_key_public;
+    mbedtls_ecp_point_init(&server_ntor_key_public);
+
+    mbedtls_ecp_point_read_binary(&grp, &server_ntor_key_public,
+                                  remote_ntor_pub_key.data(),
+                                  remote_ntor_pub_key.size());
+
+    mbedtls_ecdh_compute_shared(&grp, &ntor_shared_secret,
+                                &server_ntor_key_public, &circuit_priv_key,
+                                mbedtls_ctr_drbg_random, &ctr_drbg);
+
+    std::vector<uint8_t> ntor_shared_secret_bytes;
+    ntor_shared_secret_bytes.insert(ntor_shared_secret_bytes.end(), 32, 0);
+    mbedtls_mpi_write_binary(&ntor_shared_secret,
+                             ntor_shared_secret_bytes.data(), 32);
+
+    // secret_input = EXP(Y,x) | EXP(B,x) | ID | B | X | Y | PROTOID
+    std::vector<uint8_t> secret_input;
+    secret_input.insert(secret_input.end(), circuit_shared_secret_bytes.begin(),
+                        circuit_shared_secret_bytes.end());
+    secret_input.insert(secret_input.end(), ntor_shared_secret_bytes.begin(),
+                        ntor_shared_secret_bytes.end());
+
+    secret_input.insert(secret_input.end(), remote_identity_digest.begin(),
+                        remote_identity_digest.end());
+
+    secret_input.insert(secret_input.end(), remote_ntor_pub_key.begin(),
+                        remote_ntor_pub_key.end());
+
+    secret_input.insert(secret_input.end(), remote_ntor_pub_key.begin(),
+                        remote_ntor_pub_key.end());
+
+    std::vector<uint8_t> circuit_pub_key_bytes;
+    circuit_pub_key_bytes.insert(circuit_pub_key_bytes.end(), 32, 0);
+
+    size_t olen = 0;
+    mbedtls_ecp_point_write_binary(
+        &grp, &circuit_pub_key, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen,
+        circuit_pub_key_bytes.data(), circuit_pub_key_bytes.size());
+
+    secret_input.insert(secret_input.end(), circuit_pub_key_bytes.begin(),
+                        circuit_pub_key_bytes.end());
+
+    secret_input.insert(secret_input.end(),
+                        server_circuit_key_public_raw->begin(),
+                        server_circuit_key_public_raw->end());
+
+    std::string proto_id = "ntor-curve25519-sha256-1";
+    secret_input.insert(secret_input.end(), proto_id.begin(), proto_id.end());
+
+    std::string key_mac = proto_id + ":mac";
+
+    std::vector<uint8_t> key_seed;
+    key_seed.insert(key_seed.end(), 32, 0);
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                    (const uint8_t *)key_mac.data(), key_mac.size(),
+                    secret_input.data(), secret_input.size(), key_seed.data());
+
+    FILE *key_seed_file = fopen("key_seed.log", "w");
+    fwrite(key_seed.data(), key_seed.size(), 1, key_seed_file);
+    fclose(key_seed_file);
+
+    mbedtls_mpi_free(&circuit_shared_secret);
+    mbedtls_mpi_free(&ntor_shared_secret);
+
+    mbedtls_ecp_point_free(&server_circuit_key_public);
+    mbedtls_ecp_point_free(&server_ntor_key_public);
+  }
+
   mbedtls_pk_context rsa_pk;
   std::vector<uint8_t> responder_cert;
   std::vector<uint8_t> keying_material;
@@ -460,7 +576,6 @@ private:
                          auth_type_str.end());
 
       // rsa
-
       uint8_t local_hash_rsa[32];
       mbedtls_sha256(local_KP_relayid_rsa.data(), local_KP_relayid_rsa.size(),
                      local_hash_rsa, false);
@@ -496,14 +611,16 @@ private:
                          local_log_hash + 32);
 
       // tls here
-
       uint8_t scert_hash[32];
       mbedtls_sha256(responder_cert.data(), responder_cert.size(), scert_hash,
                      false);
       auth_buffer.insert(auth_buffer.end(), scert_hash, scert_hash + 32);
 
+      // material
+      // TODO bad
       auth_buffer.insert(auth_buffer.end(), keying_material.begin(),
                          keying_material.end());
+      printf("keying_material %zu\n", keying_material.size());
 
       std::vector<uint8_t> random_buf;
       random_buf.insert(random_buf.end(), 24, 0);
@@ -515,6 +632,13 @@ private:
       unsigned char signature[64];
       ed25519_donna_sign(signature, auth_buffer.data(), auth_buffer.size(),
                          link_secret_key.data(), link_public_key.data());
+
+      // todo rm ts
+      int a = ed25519_donna_open(signature, auth_buffer.data(),
+                                 auth_buffer.size(), link_public_key.data());
+      if (a < 0) {
+        printf("boooo\n");
+      }
 
       auth_buffer.insert(auth_buffer.end(), signature, signature + 64);
 
@@ -580,18 +704,19 @@ private:
     generate_cell_fixed(send_buffer, 0, 8, data);
   }
 
-  void add_padding_b64(std::string &b64) {
-    while (b64.size() % 4 != 0) {
-      b64.push_back('=');
-    }
-  }
+  bool generated_circuit = false;
+  mbedtls_mpi circuit_priv_key;
+  mbedtls_ecp_point circuit_pub_key;
+
+  mbedtls_ecp_group grp;
 
   std::vector<uint8_t> secret_ntor;
   std::vector<uint8_t> ntor_public_key;
+
+  std::vector<uint8_t> remote_identity_digest;
+  std::vector<uint8_t> remote_ntor_pub_key;
   void generate_create2_cell(std::vector<uint8_t> &return_buffer,
                              uint16_t circuit_id) {
-    size_t cursor = return_buffer.size();
-
     std::vector<uint8_t> data = {};
     uint16_t htype = htons(0x0002);
     data.insert(data.end(), (uint8_t *)&htype,
@@ -600,41 +725,14 @@ private:
     std::vector<uint8_t> handshake_data = {};
 
     // identity
-    std::vector<uint8_t> identity_digest;
-    identity_digest.insert(identity_digest.end(), 20, 0);
-
-    std::string identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
-    add_padding_b64(identity_b64);
-    size_t identity_len;
-    mbedtls_base64_decode(
-        (unsigned char *)identity_digest.data(), 20, &identity_len,
-        (const unsigned char *)identity_b64.c_str(), identity_b64.size());
-
-    FILE *identity_file = fopen("identity_digest.log", "w");
-    fwrite(identity_digest.data(), identity_digest.size(), 1, identity_file);
-    fclose(identity_file);
-
-    handshake_data.insert(handshake_data.end(), identity_digest.begin(),
-                          identity_digest.end());
+    handshake_data.insert(handshake_data.end(), remote_identity_digest.begin(),
+                          remote_identity_digest.end());
 
     // ntor
-    //
-    std::vector<uint8_t> remote_ntor_pub_key;
-    remote_ntor_pub_key.insert(remote_ntor_pub_key.end(), 32, 0);
-    std::string remote_ntor_b64 = "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
-    add_padding_b64(remote_ntor_b64);
-    size_t remote_ntor_len;
-    mbedtls_base64_decode(
-        (unsigned char *)remote_ntor_pub_key.data(), 32, &remote_ntor_len,
-        (const unsigned char *)remote_ntor_b64.c_str(), remote_ntor_b64.size());
-
     handshake_data.insert(handshake_data.end(), remote_ntor_pub_key.begin(),
                           remote_ntor_pub_key.end());
 
     // new pub key
-    mbedtls_ecp_group grp;
-    mbedtls_ecp_group_init(&grp);
-    mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
 
     mbedtls_mpi temp_priv_key;
     mbedtls_mpi_init(&temp_priv_key);
@@ -643,18 +741,16 @@ private:
     mbedtls_ecdh_gen_public(&grp, &temp_priv_key, &temp_pub_key_raw,
                             mbedtls_ctr_drbg_random, &ctr_drbg);
 
+    generated_circuit = true;
+    circuit_priv_key = temp_priv_key;
+    circuit_pub_key = temp_pub_key_raw;
+
     std::vector<uint8_t> temp_pub_key;
     temp_pub_key.insert(temp_pub_key.end(), 32, 0);
     size_t olen = 0;
     mbedtls_ecp_point_write_binary(&grp, &temp_pub_key_raw,
                                    MBEDTLS_ECP_PF_UNCOMPRESSED, &olen,
                                    temp_pub_key.data(), 32);
-
-    printf("pub key len %zu\n", olen);
-
-    mbedtls_mpi_free(&temp_priv_key);
-    mbedtls_ecp_group_free(&grp);
-    mbedtls_ecp_point_free(&temp_pub_key_raw);
 
     handshake_data.insert(handshake_data.end(), temp_pub_key.begin(),
                           temp_pub_key.end());
@@ -665,20 +761,6 @@ private:
     data.insert(data.end(), handshake_data.begin(), handshake_data.end());
 
     generate_cell_fixed(return_buffer, circuit_id, 10, data);
-
-    printf("CREATE2 cell total size: %zu\n", return_buffer.size());
-    printf("Circuit ID bytes: %02x %02x\n", return_buffer[cursor],
-           return_buffer[cursor + 1]);
-    printf("Command byte: %02x (should be 0a)\n", return_buffer[cursor + 2]);
-    printf("HTYPE: %02x %02x (should be 00 02)\n", return_buffer[cursor + 3],
-           return_buffer[cursor + 4]);
-    printf("HLEN: %02x %02x\n", return_buffer[cursor + 5],
-           return_buffer[cursor + 6]);
-    printf("First few handshake bytes: ");
-    for (int i = 7; i < 17 && i < return_buffer.size() - cursor; i++) {
-      printf("%02x ", return_buffer[cursor + i]);
-    }
-    printf("\n");
   }
 
   mbedtls_sha1_context sha1_ctx;

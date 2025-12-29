@@ -12,9 +12,7 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <iostream>
 #include <linux/tls.h>
-#include <locale>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>
@@ -244,13 +242,6 @@ std::vector<uint8_t> create_id_cert() {
   ed25519_donna_sign(signature, cert.data(), cert.size(),
                      master_id_secret_key_raw.data(), id_public_key.data());
 
-  // todo rm ts
-  int a = ed25519_donna_open(signature, cert.data(), cert.size(),
-                             id_public_key.data());
-  if (a < 0) {
-    printf("boooo\n");
-  }
-
   cert.insert(cert.end(), signature, signature + 64);
 
   return cert;
@@ -294,11 +285,9 @@ std::vector<uint8_t> create_tls_cert(std::vector<uint8_t> subject) {
 
 std::optional<LinkKeys> create_link_cert() {
   uint8_t link_public_key[32];
-  uint8_t link_secret_key_bad[32];
   uint8_t link_secret_key[64];
 
   ed25519_donna_keygen(link_public_key, link_secret_key);
-  ed25519_donna_seckey_expand(link_secret_key, link_secret_key_bad);
 
   FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
 
@@ -351,6 +340,12 @@ std::optional<LinkKeys> create_link_cert() {
                 .link_secret_key = link_secret_key_v,
                 .cert = cert};
   return keys;
+}
+
+void add_padding_b64(std::string &b64) {
+  while (b64.size() % 4 != 0) {
+    b64.push_back('=');
+  }
 }
 
 int main() {
@@ -422,19 +417,45 @@ int main() {
         signing_secret_key_rsa);
   fclose(signing_secret_key_rsa);
 
-  // read secret id key (again)
-  FILE *signing_secret_key = fopen("../keys/ed25519_signing_secret_key", "rb");
+  mbedtls_pk_context secret_id_rsa_pk;
+  mbedtls_pk_init(&secret_id_rsa_pk);
+  mbedtls_pk_parse_key(&secret_id_rsa_pk, secret_key_rsa.data(),
+                       secret_key_rsa.size(), NULL, 0, mbedtls_ctr_drbg_random,
+                       &ctr_drbg);
 
-  fseek(signing_secret_key, 0x20, SEEK_SET);
+  uint8_t der_buf[4096];
+  uint8_t *der_buf_cursor = der_buf + 4096;
+  int der_len =
+      mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &secret_id_rsa_pk);
 
-  std::vector<uint8_t> secret_key;
-  secret_key.insert(secret_key.end(), 64, 0);
-  fread(secret_key.data(), 1, 64, signing_secret_key);
-  fclose(signing_secret_key);
+  printf("%s\n", der_buf + (4096 - der_len));
 
-  std::vector<uint8_t> public_key;
-  public_key.insert(public_key.end(), 32, 0);
-  ed25519_donna_pubkey(public_key.data(), secret_key.data());
+  std::vector<uint8_t> local_KP_relayid_rsa;
+  local_KP_relayid_rsa.insert(local_KP_relayid_rsa.end(),
+                              (uint8_t *)der_buf + (4096 - der_len),
+                              der_buf + 4096);
+
+  uint8_t local_hash_rsa[32];
+  mbedtls_sha256(local_KP_relayid_rsa.data(), local_KP_relayid_rsa.size(),
+                 local_hash_rsa, false);
+
+  // TODO: refactor parsing keys
+  // repeat read the id key because my code is so dry:
+
+  FILE *master_id_secret_key =
+      fopen("../keys/ed25519_master_id_secret_key", "rb");
+
+  fseek(master_id_secret_key, 0x20, SEEK_SET);
+
+  std::vector<uint8_t> master_id_secret_key_raw;
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(), 64, 0);
+  fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key);
+  fclose(master_id_secret_key);
+
+  std::vector<uint8_t> id_public_key;
+  id_public_key.insert(id_public_key.end(), 32, 0);
+
+  ed25519_donna_pubkey(id_public_key.data(), master_id_secret_key_raw.data());
 
   // read ntor key
   FILE *signing_ntor_key = fopen("../keys/secret_onion_key_ntor", "rb");
@@ -461,9 +482,9 @@ int main() {
   std::vector<uint8_t> keying_material;
   keying_material.insert(keying_material.end(), 32, 0);
   std::string label = "EXPORTER FOR TOR TLS CLIENT BINDING AUTH0003";
-  mbedtls_ssl_export_keying_material(
-      &ssl, keying_material.data(), 32, label.c_str(), label.size(),
-      public_key.data(), public_key.size(), true);
+  mbedtls_ssl_export_keying_material(&ssl, keying_material.data(), 32,
+                                     label.c_str(), label.size(),
+                                     local_hash_rsa, 32, true);
 
   // IDENTITY_V_SIGNING
   auto id_cert = create_id_cert();
@@ -480,17 +501,38 @@ int main() {
   // RSA_ID_V_IDENTITY
   auto cross_cert = create_cross_cert(&ctr_drbg);
 
+  // things we get from the consesus
+  std::vector<uint8_t> remote_identity_digest;
+  remote_identity_digest.insert(remote_identity_digest.end(), 20, 0);
+
+  std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
+  add_padding_b64(remote_identity_b64);
+  size_t remote_identity_len;
+  mbedtls_base64_decode((unsigned char *)remote_identity_digest.data(), 20,
+                        &remote_identity_len,
+                        (const unsigned char *)remote_identity_b64.c_str(),
+                        remote_identity_b64.size());
+
+  std::vector<uint8_t> remote_ntor_pub_key;
+  remote_ntor_pub_key.insert(remote_ntor_pub_key.end(), 32, 0);
+  std::string remote_ntor_b64 = "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
+  add_padding_b64(remote_ntor_b64);
+  size_t remote_ntor_len;
+  mbedtls_base64_decode(
+      (unsigned char *)remote_ntor_pub_key.data(), 32, &remote_ntor_len,
+      (const unsigned char *)remote_ntor_b64.c_str(), remote_ntor_b64.size());
+
   // start the tor connection
 
-  TorConnection connection({{0x04, id_cert},
-                            {0x06, link_cert->cert},
-                            /*{0x05, tls_cert},*/
-                            {0x02, rsa_id_cert},
-                            {0x07, cross_cert}},
-                           public_key, link_cert->link_secret_key,
-                           link_cert->link_public_key, my_addr_raw,
-                           other_addr_raw, secret_key_rsa, responder_data,
-                           keying_material, ntor_key);
+  TorConnection connection(
+      {{0x04, id_cert},
+       {0x06, link_cert->cert},
+       /*{0x05, tls_cert},*/
+       {0x02, rsa_id_cert},
+       {0x07, cross_cert}},
+      id_public_key, link_cert->link_secret_key, link_cert->link_public_key,
+      my_addr_raw, other_addr_raw, secret_key_rsa, responder_data,
+      keying_material, ntor_key, remote_identity_digest, remote_ntor_pub_key);
 
   std::vector<uint8_t> send_buffer = {};
   std::vector<uint8_t> initiator_log = {};
