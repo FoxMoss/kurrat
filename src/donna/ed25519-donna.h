@@ -50,22 +50,9 @@
 #endif
 #endif
 
-#if defined(ED25519_SSE2)
-#include "curve25519-donna-sse2.h"
-#elif defined(ED25519_64BIT)
 #include "curve25519-donna-64bit.h"
-#else
-#include "curve25519-donna-32bit.h"
-#endif
-
 #include "curve25519-donna-helpers.h"
-
-/* separate uint128 check for 64 bit sse2 */
-#if defined(HAVE_UINT128) && !defined(ED25519_FORCE_32BIT)
 #include "modm-donna-64bit.h"
-#else
-#include "modm-donna-32bit.h"
-#endif
 
 typedef unsigned char hash_512bits[64];
 
@@ -107,18 +94,7 @@ typedef struct ge25519_pniels_t {
 
 #include "ed25519-donna-basepoint-table.h"
 
-#if defined(ED25519_64BIT)
 #include "ed25519-donna-64bit-tables.h"
 #include "ed25519-donna-64bit-x86.h"
-#else
-#include "ed25519-donna-32bit-tables.h"
-#include "ed25519-donna-64bit-x86-32bit.h"
-#endif
 
-#if defined(ED25519_SSE2)
-#include "ed25519-donna-32bit-sse2.h"
-#include "ed25519-donna-64bit-sse2.h"
-#include "ed25519-donna-impl-sse2.h"
-#else
 #include "ed25519-donna-impl-base.h"
-#endif
