@@ -1,5 +1,6 @@
 #pragma once
 #include "mbedtls/md.h"
+#include <iterator>
 #include <unordered_map>
 extern "C" {
 #include "donna/ed25519_donna_tor.h"
@@ -507,16 +508,21 @@ private:
 
     // secret_input = EXP(Y,x) | EXP(B,x) | ID | B | X | Y | PROTOID
     std::vector<uint8_t> secret_input;
-    secret_input.insert(secret_input.end(), circuit_shared_secret_bytes.begin(),
-                        circuit_shared_secret_bytes.end());
-    secret_input.insert(secret_input.end(), ntor_shared_secret_bytes.begin(),
-                        ntor_shared_secret_bytes.end());
+
+    // why is it reversed??
+    // no idea, little endian issue maybe?
+    secret_input.insert(
+        secret_input.end(),
+        std::reverse_iterator(circuit_shared_secret_bytes.end()),
+        std::reverse_iterator(circuit_shared_secret_bytes.begin()));
+
+    secret_input.insert(
+        secret_input.end(),
+        std::reverse_iterator(ntor_shared_secret_bytes.end()),
+        std::reverse_iterator(ntor_shared_secret_bytes.begin()));
 
     secret_input.insert(secret_input.end(), remote_identity_digest.begin(),
                         remote_identity_digest.end());
-
-    secret_input.insert(secret_input.end(), remote_ntor_pub_key.begin(),
-                        remote_ntor_pub_key.end());
 
     secret_input.insert(secret_input.end(), remote_ntor_pub_key.begin(),
                         remote_ntor_pub_key.end());
@@ -539,17 +545,13 @@ private:
     std::string proto_id = "ntor-curve25519-sha256-1";
     secret_input.insert(secret_input.end(), proto_id.begin(), proto_id.end());
 
-    std::string key_mac = proto_id + ":mac";
+    std::string key_extract = proto_id + ":key_extract";
 
     std::vector<uint8_t> key_seed;
     key_seed.insert(key_seed.end(), 32, 0);
     mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-                    (const uint8_t *)key_mac.data(), key_mac.size(),
+                    (const uint8_t *)key_extract.data(), key_extract.size(),
                     secret_input.data(), secret_input.size(), key_seed.data());
-
-    FILE *key_seed_file = fopen("key_seed.log", "w");
-    fwrite(key_seed.data(), key_seed.size(), 1, key_seed_file);
-    fclose(key_seed_file);
 
     mbedtls_mpi_free(&circuit_shared_secret);
     mbedtls_mpi_free(&ntor_shared_secret);
