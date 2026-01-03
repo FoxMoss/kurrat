@@ -364,7 +364,11 @@ int main() {
   mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                         (const unsigned char *)"client", 6);
 
-  mbedtls_net_connect(&server_ctx, "127.0.0.1", "9001", MBEDTLS_NET_PROTO_TCP);
+  std::string other_addr_str = "127.0.0.1";
+  mbedtls_net_connect(&server_ctx, other_addr_str.c_str(), "9001",
+                      MBEDTLS_NET_PROTO_TCP);
+  std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
+  std::string remote_ntor_b64 = "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
 
   mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
                               MBEDTLS_SSL_TRANSPORT_STREAM,
@@ -392,13 +396,12 @@ int main() {
   mbedtls_net_set_nonblock(&server_ctx);
 
   // reduce size format of ip addresses
-  std::string other_addr_str = "127.0.0.1";
 
   struct in_addr other_addr;
   inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
   uint32_t other_addr_raw = other_addr.s_addr;
 
-  std::string my_addr_str = "73.24.22.153";
+  std::string my_addr_str = "127.0.0.1";
 
   struct in_addr my_addr;
   inet_pton(AF_INET, my_addr_str.c_str(), &my_addr);
@@ -505,7 +508,6 @@ int main() {
   std::vector<uint8_t> remote_identity_digest;
   remote_identity_digest.insert(remote_identity_digest.end(), 20, 0);
 
-  std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
   add_padding_b64(remote_identity_b64);
   size_t remote_identity_len;
   mbedtls_base64_decode((unsigned char *)remote_identity_digest.data(), 20,
@@ -515,7 +517,6 @@ int main() {
 
   std::vector<uint8_t> remote_ntor_pub_key;
   remote_ntor_pub_key.insert(remote_ntor_pub_key.end(), 32, 0);
-  std::string remote_ntor_b64 = "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
   add_padding_b64(remote_ntor_b64);
   size_t remote_ntor_len;
   mbedtls_base64_decode(

@@ -89,6 +89,7 @@ public:
                                 der_buf + 4096);
     psa_crypto_init();
     mbedtls_sha1_init(&sha1_ctx);
+    mbedtls_sha1_starts(&sha1_ctx);
 
     ntor_public_key.insert(ntor_public_key.end(), crypto_scalarmult_SCALARBYTES,
                            0);
@@ -97,6 +98,9 @@ public:
 
     mbedtls_ecp_group_init(&grp);
     mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
+
+    mbedtls_aes_init(&forward_aes_ctx);
+    mbedtls_aes_init(&backward_aes_ctx);
   }
   ~TorConnection() {
     mbedtls_ecp_group_free(&grp);
@@ -109,6 +113,11 @@ public:
       mbedtls_mpi_free(&circuit_priv_key);
       mbedtls_ecp_point_free(&circuit_pub_key);
     }
+
+    mbedtls_sha1_free(&sha1_ctx);
+
+    mbedtls_aes_free(&forward_aes_ctx);
+    mbedtls_aes_free(&backward_aes_ctx);
   }
 
   void generate_versions_cell(std::vector<uint8_t> &return_buffer) {
@@ -210,13 +219,22 @@ public:
         auto created_buffer = payload.value();
         uint64_t created_cursor = 0;
         parse_created(created_buffer, created_cursor);
+
+        generate_begin_relay_cell(send_buffer, 0b1000000000000010, 20,
+                                  "205.185.125.167:80", 0);
         break;
+      }
+      case 3: {
+
+        auto relay_buffer = payload.value();
+        uint64_t relay_cursor = 0;
+
+        parse_relay(relay_buffer, relay_cursor);
       }
       }
     }
 
-    printf("%i\n", ntohs(circ_id.value()));
-    printf("%i\n", command.value());
+    printf("got command %i\n", command.value());
     if (!sent_auth) {
       responder_log.insert(responder_log.end(), return_buffer.begin(),
                            return_buffer.begin() + cursor);
@@ -558,7 +576,77 @@ private:
 
     mbedtls_ecp_point_free(&server_circuit_key_public);
     mbedtls_ecp_point_free(&server_ntor_key_public);
+
+    // generate material
+    std::string key_expand = proto_id + ":key_expand";
+    std::vector<uint8_t> key_expand1;
+    key_expand1.insert(key_expand1.end(), key_expand.begin(), key_expand.end());
+    key_expand1.push_back(1);
+
+    auto hash_func = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    auto key_size = 32;
+#define key_type uint8_t
+
+    // K1
+    std::vector<key_type> key1;
+    key1.insert(key1.end(), key_size, 0);
+    mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
+                    key_expand1.data(), key_expand1.size(), key1.data());
+
+    // K2
+    std::vector<key_type> key_expand2;
+    key_expand2.insert(key_expand2.end(), key1.begin(), key1.end());
+    key_expand2.insert(key_expand2.end(), key_expand.begin(), key_expand.end());
+    key_expand2.push_back(2);
+
+    std::vector<key_type> key2;
+    key2.insert(key2.end(), key_size, 0);
+    mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
+                    key_expand2.data(), key_expand2.size(), key2.data());
+
+    // K3
+    std::vector<key_type> key_expand3;
+    key_expand3.insert(key_expand3.end(), key2.begin(), key2.end());
+    key_expand3.insert(key_expand3.end(), key_expand.begin(), key_expand.end());
+    key_expand3.push_back(3);
+
+    std::vector<key_type> key3;
+    key3.insert(key3.end(), key_size, 0);
+    mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
+                    key_expand3.data(), key_expand3.size(), key3.data());
+
+    std::vector<uint8_t> combined_key;
+    combined_key.insert(combined_key.end(), key1.begin(), key1.end());
+    combined_key.insert(combined_key.end(), key2.begin(), key2.end());
+    combined_key.insert(combined_key.end(), key3.begin(), key3.end());
+
+    mbedtls_sha1_update(&sha1_ctx, combined_key.data(), 20);
+    forward_encryption_key = std::vector<uint8_t>{};
+    forward_encryption_key->insert(forward_encryption_key->end(),
+                                   combined_key.begin() + 20 + 20,
+                                   combined_key.begin() + 20 + 20 + 16);
+
+    mbedtls_aes_setkey_enc(&forward_aes_ctx, forward_encryption_key->data(),
+                           128);
+
+    backward_encryption_key = std::vector<uint8_t>{};
+    backward_encryption_key->insert(backward_encryption_key->end(),
+                                    combined_key.begin() + 20 + 20 + 16,
+                                    combined_key.begin() + 20 + 20 + 16 + 16);
+    mbedtls_aes_setkey_enc(&backward_aes_ctx, backward_encryption_key->data(),
+                           128);
   }
+
+  bool parse_relay(std::vector<uint8_t> &relay_buffer, uint64_t &cursor);
+
+  bool parse_end_relay(std::vector<uint8_t> &end_buffer, uint64_t &cursor);
+
+  std::optional<std::vector<uint8_t>> forward_encryption_key;
+  std::optional<std::vector<uint8_t>> backward_encryption_key;
+  uint8_t forward_stream_block[16] = {};
+  uint8_t forward_stream_iv[16] = {};
+  uint8_t backward_stream_block[16] = {};
+  uint8_t backward_stream_iv[16] = {};
 
   mbedtls_pk_context rsa_pk;
   std::vector<uint8_t> responder_cert;
@@ -634,13 +722,6 @@ private:
       unsigned char signature[64];
       ed25519_donna_sign(signature, auth_buffer.data(), auth_buffer.size(),
                          link_secret_key.data(), link_public_key.data());
-
-      // todo rm ts
-      int a = ed25519_donna_open(signature, auth_buffer.data(),
-                                 auth_buffer.size(), link_public_key.data());
-      if (a < 0) {
-        printf("boooo\n");
-      }
 
       auth_buffer.insert(auth_buffer.end(), signature, signature + 64);
 
@@ -766,6 +847,16 @@ private:
   }
 
   mbedtls_sha1_context sha1_ctx;
+
+  mbedtls_aes_context forward_aes_ctx;
+  mbedtls_aes_context backward_aes_ctx;
+  size_t forward_stream_offset = 0;
+  size_t backward_stream_offset = 0;
+
+  // A NOTE:
+  // intiatior -> noted == out ==  forward
+  // intiatior <- noted == in  ==  backward
+
   // relay things
   void generate_relay_cell(std::vector<uint8_t> &send_buffer,
                            uint8_t relay_command, uint16_t circuit_id,
@@ -781,7 +872,6 @@ private:
     data.insert(data.end(), (uint8_t *)&stream_id,
                 (uint8_t *)&stream_id + sizeof(uint16_t));
 
-    auto digest_reference = data.end() - 1;
     data.insert(data.end(), 4,
                 0); // digest, we need to calculate this after the cell
 
@@ -801,20 +891,35 @@ private:
 
     data.insert(data.end(), padding_len, 0);
 
-    mbedtls_sha1_starts(&sha1_ctx);
-
     mbedtls_sha1_update(&sha1_ctx, data.data(), data.size());
 
-    uint8_t digest_full[20];
-    mbedtls_sha1_finish(&sha1_ctx, digest_full);
+    uint8_t digest_full[20] = {};
 
-    data.erase(digest_reference + 1, digest_reference + 1 + 4);
-    data.insert(digest_reference + 1, (uint8_t *)digest_full,
+    mbedtls_sha1_context old_ctx;
+    old_ctx = sha1_ctx;
+
+    // make a new sha1 instance because we cant continusiously make hashes
+    mbedtls_sha1_init(&old_ctx);
+    mbedtls_sha1_clone(&old_ctx, &sha1_ctx);
+
+    mbedtls_sha1_finish(&old_ctx, digest_full);
+    mbedtls_sha1_free(&old_ctx);
+
+    data.erase(data.begin() + 5, data.begin() + 5 + 4);
+    data.insert(data.begin() + 5, (uint8_t *)digest_full,
                 (uint8_t *)digest_full + 4);
 
-    mbedtls_sha1_free(&sha1_ctx);
+    if (!forward_encryption_key.has_value()) {
+      printf("error: cannot crypto\n");
+      return;
+    }
 
-    generate_cell_fixed(send_buffer, circuit_id, 3, data);
+    std::vector<uint8_t> encrypted_data;
+    encrypted_data.insert(encrypted_data.end(), data.size(), 0);
+    mbedtls_aes_crypt_ctr(&forward_aes_ctx, data.size(), &forward_stream_offset,
+                          forward_stream_iv, forward_stream_block,
+                          (const uint8_t *)data.data(), encrypted_data.data());
+    generate_cell_fixed(send_buffer, circuit_id, 3, encrypted_data);
   }
 
   // crypto bs

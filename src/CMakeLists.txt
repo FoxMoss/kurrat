@@ -15,7 +15,7 @@ set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++23 -fsanitize=address")
 
 add_executable(torvpn
  main.cpp
- tor.hpp
+ tor.cpp
  donna/ed25519_tor.c
 )
 
