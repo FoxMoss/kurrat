@@ -1,6 +1,7 @@
 #pragma once
 #include "mbedtls/md.h"
 #include <iterator>
+#include <queue>
 #include <unordered_map>
 extern "C" {
 #include "donna/ed25519_donna_tor.h"
@@ -143,6 +144,8 @@ public:
       return;
     }
 
+    printf("got command %i\n", command.value());
+
     if (command.value() == 7 || command.value() >= 128) { // variable length
 
       auto length = parse_uint16(return_buffer, cursor);
@@ -207,7 +210,7 @@ public:
           generate_authenticate_cell(send_buffer, initiator_log);
           generate_netinfo_cell(send_buffer);
 
-          generate_create2_cell(send_buffer, 0b1000000000000010);
+          generate_create2_cell(send_buffer, global_circuit_id);
           // generate_create2_cell(send_buffer, 0x8001);
           // generate_begin_relay_cell(send_buffer, 22, 22, "foxmoss.com:80",
           // 0);
@@ -220,7 +223,7 @@ public:
         uint64_t created_cursor = 0;
         parse_created(created_buffer, created_cursor);
 
-        generate_begin_relay_cell(send_buffer, 0b1000000000000010, 20,
+        generate_begin_relay_cell(send_buffer, global_circuit_id, 20,
                                   "205.185.125.167:80", 0);
         break;
       }
@@ -229,12 +232,19 @@ public:
         auto relay_buffer = payload.value();
         uint64_t relay_cursor = 0;
 
-        parse_relay(relay_buffer, relay_cursor);
+        parse_relay(relay_buffer, circ_id.value(), relay_cursor, send_buffer);
+        break;
+      }
+      case 4: {
+        auto destroy_buffer = payload.value();
+        uint64_t destroy_cursor = 0;
+
+        parse_destroy(destroy_buffer, destroy_cursor);
+        break;
       }
       }
     }
 
-    printf("got command %i\n", command.value());
     if (!sent_auth) {
       responder_log.insert(responder_log.end(), return_buffer.begin(),
                            return_buffer.begin() + cursor);
@@ -250,21 +260,9 @@ public:
     }
   }
 
-  void generate_begin_relay_cell(std::vector<uint8_t> &send_buffer,
-                                 uint16_t circuit_id, uint16_t stream_id,
-                                 std::string addrport, uint32_t flags) {
-    std::vector<uint8_t> data;
-    data.insert(data.end(), addrport.begin(), addrport.end());
-    data.push_back(0);
-
-    flags = htonl(flags);
-    data.insert(data.end(), (uint8_t *)&flags,
-                (uint8_t *)&flags + sizeof(uint32_t));
-
-    generate_relay_cell(send_buffer, 1, circuit_id, stream_id, data);
-  }
-
 private:
+  uint16_t global_circuit_id = 0b0000000000000010;
+
   void generate_cell_fixed(std::vector<uint8_t> &return_buffer,
                            uint16_t circuit_id, uint8_t command,
                            std::vector<uint8_t> &data) {
@@ -481,6 +479,11 @@ private:
     return true;
   }
 
+  void parse_destroy(std::vector<uint8_t> &destroy_buffer, uint64_t &cursor) {
+    auto destroy_reason = parse_uint8(destroy_buffer, cursor);
+    printf("destroyed with reason, %i\n", destroy_reason.value());
+  }
+
   void parse_created(std::vector<uint8_t> &created_buffer, uint64_t &cursor) {
     parse_uint16(created_buffer, cursor); // hanshake len
 
@@ -637,9 +640,41 @@ private:
                            128);
   }
 
-  bool parse_relay(std::vector<uint8_t> &relay_buffer, uint64_t &cursor);
+  struct TorStream {};
+  ssize_t my_global_sent_window = 1000; // 1000 if no circwindow is give
+  ssize_t my_global_recived_window = 0;
+
+  std::unordered_map<uint16_t, TorStream> stream_map;
+  void generate_begin_relay_cell(std::vector<uint8_t> &send_buffer,
+                                 uint16_t circuit_id, uint16_t stream_id,
+                                 std::string addrport, uint32_t flags) {
+    std::vector<uint8_t> data;
+    data.insert(data.end(), addrport.begin(), addrport.end());
+    data.push_back(0);
+
+    flags = htonl(flags);
+    data.insert(data.end(), (uint8_t *)&flags,
+                (uint8_t *)&flags + sizeof(uint32_t));
+
+    stream_map[stream_id] = {};
+
+    generate_relay_cell(send_buffer, 1, circuit_id, stream_id, data);
+  }
+
+  bool parse_relay(std::vector<uint8_t> &relay_buffer, uint16_t circuit_id,
+                   uint64_t &cursor, std::vector<uint8_t> &send_buffer);
 
   bool parse_end_relay(std::vector<uint8_t> &end_buffer, uint64_t &cursor);
+
+  bool parse_data_relay(std::vector<uint8_t> &end_buffer, uint16_t circuit_id,
+                        uint16_t stream_id, std::vector<uint8_t> &send_buffer);
+
+  bool generate_send_me_relay(uint16_t circuit_id, uint16_t stream_id,
+                              std::vector<uint8_t> &send_buffer);
+
+  bool generate_data_relay(std::vector<uint8_t> &send_buffer,
+                           std::vector<uint8_t> data, uint16_t circuit_id,
+                           uint16_t stream_id);
 
   std::optional<std::vector<uint8_t>> forward_encryption_key;
   std::optional<std::vector<uint8_t>> backward_encryption_key;

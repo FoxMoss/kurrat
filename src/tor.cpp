@@ -4,7 +4,8 @@
 #include <cstdio>
 
 bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
-                                uint64_t &cursor) {
+                                uint16_t circuit_id, uint64_t &cursor,
+                                std::vector<uint8_t> &send_buffer) {
 
   std::vector<uint8_t> decrypted_buffer;
   decrypted_buffer.insert(decrypted_buffer.end(), relay_buffer.size(), 0);
@@ -21,7 +22,8 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
   auto digest = parse_fixed_buffer(decrypted_buffer, cursor, 4);
   auto length = parse_uint16(decrypted_buffer, cursor);
 
-  if (!length.has_value() || !relay_command.has_value()) {
+  if (!length.has_value() || !relay_command.has_value() ||
+      !stream_id.has_value()) {
     return false;
   }
 
@@ -37,9 +39,19 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 
   switch (relay_command.value()) {
   case 4: // connected. no parsing needed!
+    printf("connected to address through proxy!\n");
     break;
+
+  case 5: // sendme, literally no data to parse
+    my_global_sent_window += 100;
+    break;
+
   case 3:
     return parse_end_relay(relay_payload.value(), relay_payload_cursor);
+    break;
+  case 2:
+    return parse_data_relay(relay_payload.value(), circuit_id,
+                            stream_id.value(), send_buffer);
     break;
   }
   return true;
@@ -50,5 +62,55 @@ bool TorConnection::parse_end_relay(std::vector<uint8_t> &end_buffer,
   auto end_reason = parse_uint8(end_buffer, cursor);
   printf("end reason %i\n", end_reason.value());
 
+  return true;
+}
+
+bool TorConnection::generate_send_me_relay(uint16_t circuit_id,
+                                           uint16_t stream_id,
+                                           std::vector<uint8_t> &send_buffer) {
+  if (!stream_map.contains(stream_id))
+    return false;
+
+  std::vector<uint8_t> data;
+  data.push_back(0); // yep thats it!
+  // version 0, no auth
+
+  generate_relay_cell(send_buffer, 5, circuit_id, stream_id, data);
+  return true;
+}
+
+bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
+                                     uint16_t circuit_id, uint16_t stream_id,
+                                     std::vector<uint8_t> &send_buffer) {
+
+  if (!stream_map.contains(stream_id))
+    return false;
+
+  // TODO send as a data callback
+
+  my_global_recived_window++;
+
+  if (my_global_recived_window >= 100 &&
+      generate_send_me_relay(circuit_id, stream_id, send_buffer)) {
+    my_global_recived_window -= 100;
+  }
+
+  return true;
+}
+
+bool TorConnection::generate_data_relay(std::vector<uint8_t> &send_buffer,
+                                        std::vector<uint8_t> data,
+                                        uint16_t circuit_id,
+                                        uint16_t stream_id) {
+
+  if (!stream_map.contains(stream_id))
+    return false;
+
+  if (my_global_sent_window < 0)
+    return false;
+
+  generate_relay_cell(send_buffer, 2, circuit_id, stream_id, data);
+
+  my_global_sent_window--;
   return true;
 }
