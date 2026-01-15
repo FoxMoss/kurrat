@@ -1,3 +1,4 @@
+#include <thread>
 extern "C" {
 #include "donna/ed25519_donna_tor.h"
 }
@@ -535,6 +536,8 @@ int main() {
       my_addr_raw, other_addr_raw, secret_key_rsa, responder_data,
       keying_material, ntor_key, remote_identity_digest, remote_ntor_pub_key);
 
+  set_global_conn(&connection);
+
   std::vector<uint8_t> send_buffer = {};
   std::vector<uint8_t> initiator_log = {};
   connection.generate_versions_cell(send_buffer);
@@ -550,19 +553,25 @@ int main() {
   std::vector<uint8_t> read_buffer;
   int size;
   FILE *log_file = fopen("out.log", "w");
+
+  std::thread socks_thread(
+      [] { setup_socks(TorConnection::create_unix_socket); });
+  socks_thread.detach();
+
+  size_t cycles = 0;
   while (true) {
-    if (!read_buffer.empty()) {
-      connection.parse_cell(read_buffer, send_buffer, initiator_log);
+    cycles++;
 
-      if (!send_buffer.empty()) {
+    connection.step(read_buffer, send_buffer, initiator_log);
 
-        printf("writing! %zu \n", send_buffer.size());
-        mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+    if (!send_buffer.empty()) {
 
-        fwrite(send_buffer.data(), send_buffer.size(), 1, from_me);
-        fflush(from_me);
-        send_buffer.clear();
-      }
+      printf("writing! %zu \n", send_buffer.size());
+      mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+
+      fwrite(send_buffer.data(), send_buffer.size(), 1, from_me);
+      fflush(from_me);
+      send_buffer.clear();
     }
 
     unsigned char buf[256];

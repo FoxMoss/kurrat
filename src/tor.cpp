@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <unistd.h>
 
 bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
                                 uint16_t circuit_id, uint64_t &cursor,
@@ -39,6 +40,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 
   switch (relay_command.value()) {
   case 4: // connected. no parsing needed!
+    stream_map[stream_id.value()].connected = true;
     printf("connected to address through proxy!\n");
     break;
 
@@ -71,11 +73,9 @@ bool TorConnection::generate_send_me_relay(uint16_t circuit_id,
   if (!stream_map.contains(stream_id))
     return false;
 
-  std::vector<uint8_t> data;
-  data.push_back(0); // yep thats it!
-  // version 0, no auth
+  std::vector<uint8_t> data = {};
 
-  generate_relay_cell(send_buffer, 5, circuit_id, stream_id, data);
+  generate_relay_cell(send_buffer, 5, circuit_id, 0, data);
   return true;
 }
 
@@ -86,7 +86,12 @@ bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
   if (!stream_map.contains(stream_id))
     return false;
 
-  // TODO send as a data callback
+  if (stream_map.contains(stream_id) &&
+      stream_map[stream_id].file_descriptor_pipe.has_value()) {
+    write(stream_map[stream_id].file_descriptor_pipe.value(),
+          data_buffer.data(), data_buffer.size());
+    printf("to fd %zu\n", data_buffer.size());
+  }
 
   my_global_recived_window++;
 

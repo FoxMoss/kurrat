@@ -1,6 +1,7 @@
 #pragma once
 #include "mbedtls/md.h"
 #include <iterator>
+#include <mutex>
 #include <queue>
 #include <unordered_map>
 extern "C" {
@@ -49,8 +50,10 @@ extern "C" {
 #define CELL_BODY_LEN 509
 
 class TorConnection {
-
 public:
+  // curl interplay
+  static int create_unix_socket(char *addrport, uint16_t stream_id);
+
   TorConnection(
       std::vector<std::pair<uint8_t, std::vector<uint8_t>>> local_certs,
       std::vector<uint8_t> local_KP_relayid_ed,
@@ -131,9 +134,46 @@ public:
 
   bool sent_auth = false;
   std::vector<uint8_t> responder_log;
+  std::mutex during_step;
+  void step(std::vector<uint8_t> &return_buffer,
+            std::vector<uint8_t> &send_buffer,
+            std::vector<uint8_t> &initiator_log) {
+
+    std::lock_guard<std::mutex> guard(during_step);
+
+    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
+                       additional_send_buffer.end());
+    additional_send_buffer.clear();
+
+    for (auto stream : stream_map) {
+      if (!stream.second.file_descriptor_pipe.has_value() ||
+          !stream.second.connected)
+        continue;
+
+      std::vector<uint8_t> data;
+      data.insert(data.end(), 256, 0);
+      int ret_size = read(stream.second.file_descriptor_pipe.value(),
+                          data.data(), data.size());
+
+      if (ret_size <= 0)
+        continue;
+
+      data.erase(data.begin() + ret_size, data.end());
+
+      printf("from fd %zu\n", data.size());
+
+      generate_data_relay(send_buffer, data, global_circuit_id, stream.first);
+    }
+
+    if (!return_buffer.empty()) {
+      parse_cell(return_buffer, send_buffer, initiator_log);
+    }
+  }
+
   void parse_cell(std::vector<uint8_t> &return_buffer,
                   std::vector<uint8_t> &send_buffer,
                   std::vector<uint8_t> &initiator_log) {
+
     uint64_t cursor = 0;
     auto circ_id = parse_uint16(return_buffer, cursor);
     if (!circ_id.has_value()) {
@@ -212,8 +252,6 @@ public:
 
           generate_create2_cell(send_buffer, global_circuit_id);
           // generate_create2_cell(send_buffer, 0x8001);
-          // generate_begin_relay_cell(send_buffer, 22, 22, "foxmoss.com:80",
-          // 0);
         }
 
         break;
@@ -223,8 +261,8 @@ public:
         uint64_t created_cursor = 0;
         parse_created(created_buffer, created_cursor);
 
-        generate_begin_relay_cell(send_buffer, global_circuit_id, 20,
-                                  "205.185.125.167:80", 0);
+        generate_begin_relay_cell(send_buffer, global_circuit_id, 22,
+                                  "foxmoss.com:80", 0);
         break;
       }
       case 3: {
@@ -261,6 +299,8 @@ public:
   }
 
 private:
+  std::vector<uint8_t> additional_send_buffer = {};
+
   uint16_t global_circuit_id = 0b0000000000000010;
 
   void generate_cell_fixed(std::vector<uint8_t> &return_buffer,
@@ -640,7 +680,10 @@ private:
                            128);
   }
 
-  struct TorStream {};
+  struct TorStream {
+    bool connected = false;
+    std::optional<int> file_descriptor_pipe;
+  };
   ssize_t my_global_sent_window = 1000; // 1000 if no circwindow is give
   ssize_t my_global_recived_window = 0;
 
@@ -961,3 +1004,9 @@ private:
   mbedtls_ctr_drbg_context ctr_drbg;
   mbedtls_entropy_context entropy;
 };
+
+void set_global_conn(TorConnection *c_tor_connection);
+
+extern "C" {
+int setup_socks(int (*make_connection)(char *addrport, uint16_t stream_id));
+}
