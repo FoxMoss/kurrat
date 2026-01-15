@@ -40,7 +40,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 
   switch (relay_command.value()) {
   case 4: // connected. no parsing needed!
-    stream_map[stream_id.value()].connected = true;
+    stream_map[ntohs(stream_id.value())].connected = true;
     printf("connected to address through proxy!\n");
     break;
 
@@ -53,7 +53,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
     break;
   case 2:
     return parse_data_relay(relay_payload.value(), circuit_id,
-                            stream_id.value(), send_buffer);
+                            ntohs(stream_id.value()), send_buffer);
     break;
   }
   return true;

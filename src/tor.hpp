@@ -52,7 +52,7 @@ extern "C" {
 class TorConnection {
 public:
   // curl interplay
-  static int create_unix_socket(char *addrport, uint16_t stream_id);
+  static int create_unix_socket(char *addr, uint16_t port, uint16_t stream_id);
 
   TorConnection(
       std::vector<std::pair<uint8_t, std::vector<uint8_t>>> local_certs,
@@ -146,6 +146,7 @@ public:
     additional_send_buffer.clear();
 
     for (auto stream : stream_map) {
+
       if (!stream.second.file_descriptor_pipe.has_value() ||
           !stream.second.connected)
         continue;
@@ -261,8 +262,8 @@ public:
         uint64_t created_cursor = 0;
         parse_created(created_buffer, created_cursor);
 
-        generate_begin_relay_cell(send_buffer, global_circuit_id, 22,
-                                  "foxmoss.com:80", 0);
+        // generate_begin_relay_cell(send_buffer, global_circuit_id, 22,
+        //                           "205.185.125.167:443", 0);
         break;
       }
       case 3: {
@@ -1008,5 +1009,6 @@ private:
 void set_global_conn(TorConnection *c_tor_connection);
 
 extern "C" {
-int setup_socks(int (*make_connection)(char *addrport, uint16_t stream_id));
+int setup_socks(int (*make_connection)(char *addr, uint16_t port,
+                                       uint16_t stream_id));
 }

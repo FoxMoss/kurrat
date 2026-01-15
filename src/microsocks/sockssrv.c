@@ -180,11 +180,8 @@ static int connect_socks_target(unsigned char *buf, size_t n,
   struct addrinfo *raddr = addr_choose(remote, &bind_addr);
   uint16_t stream_id = rand() % UINT16_MAX;
 
-  char addrport[256 + 256];
-  snprintf(addrport, 256 + 256, "%s:%i", namebuf, port);
-
   printf("yo2\n");
-  int fd = client->make_connection(addrport, stream_id);
+  int fd = client->make_connection(namebuf, port, stream_id);
   if (fd == -1) {
   eval_errno:
     if (fd != -1)
@@ -322,6 +319,7 @@ static void copyloop(int fd1, int fd2) {
        available stacksize to improve throughput. */
     char buf[MIN(16 * 1024, THREAD_STACK_SIZE / 2)];
     ssize_t sent = 0, n = read(infd, buf, sizeof buf);
+    printf("from socks read %zi from pipe\n", n);
     if (n <= 0)
       return;
     while (sent < n) {
@@ -459,7 +457,8 @@ static void zero_arg(char *s) {
     s[i] = 0;
 }
 
-int setup_socks(int (*make_connection)(char *addrport, uint16_t stream_id)) {
+int setup_socks(int (*make_connection)(char *addr, uint16_t port,
+                                       uint16_t stream_id)) {
   int ch;
   const char *listenip = "0.0.0.0";
   char *p, *q;

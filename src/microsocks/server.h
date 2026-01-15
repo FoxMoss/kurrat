@@ -34,7 +34,7 @@ union sockaddr_union {
        : ((SOCKADDR_UNION_AF(PTR) == AF_INET6) ? (PTR)->v6.sin6_port : 0))
 
 struct client {
-  int (*make_connection)(char *addrport, uint16_t stream_id);
+  int (*make_connection)(char *addr, uint16_t port, uint16_t stream_id);
   union sockaddr_union addr;
   int fd;
 };

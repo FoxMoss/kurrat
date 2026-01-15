@@ -365,12 +365,19 @@ int main() {
   mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                         (const unsigned char *)"client", 6);
 
-  std::string other_addr_str = "23.129.64.160";
-  mbedtls_net_connect(&server_ctx, other_addr_str.c_str(), "443",
+  std::string other_addr_str = "144.208.79.169";
+  mbedtls_net_connect(&server_ctx, other_addr_str.c_str(), "9001",
                       MBEDTLS_NET_PROTO_TCP);
-  std::string remote_identity_b64 = "15SIRHuiiiETTOzOs5r6Lm5C9pM";
-  std::string remote_ntor_b64 = "u2NhMANjqqsj8w2I/wAggv7ZvZxJwGniePK4onwIxWI";
+  std::string remote_identity_b64 = "mKJ2LWyOc+Bopt4aueqcTP9AW0s";
+  std::string remote_ntor_b64 = "Tl1Y0EMy2eUrCO/zLYbO9TtB61m/bZ7v313xemGhNn0";
 
+  // std::string other_addr_str = "127.0.0.1";
+  // mbedtls_net_connect(&server_ctx, other_addr_str.c_str(), "9001",
+  //                     MBEDTLS_NET_PROTO_TCP);
+  // std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
+  // std::string remote_ntor_b64 =
+  // "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
+  //
   mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
                               MBEDTLS_SSL_TRANSPORT_STREAM,
                               MBEDTLS_SSL_PRESET_DEFAULT);
