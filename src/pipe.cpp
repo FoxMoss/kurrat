@@ -48,7 +48,7 @@ int TorConnection::create_unix_socket(char *addr, uint16_t port,
 
   char addrport[256];
   snprintf(addrport, 256, "%s:%i", addr_str, port);
-  printf("%s -> %s\n", addr, addrport);
+  printf("%s -> %s on %i\n", addr, addrport, stream_id);
   tor_connection->generate_begin_relay_cell(
       tor_connection->additional_send_buffer, tor_connection->global_circuit_id,
       stream_id, std::string(addrport), 0);

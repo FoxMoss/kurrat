@@ -92,8 +92,10 @@ public:
                                 (uint8_t *)der_buf + (4096 - der_len),
                                 der_buf + 4096);
     psa_crypto_init();
-    mbedtls_sha1_init(&sha1_ctx);
-    mbedtls_sha1_starts(&sha1_ctx);
+    mbedtls_sha1_init(&forward_sha1_ctx);
+    mbedtls_sha1_starts(&forward_sha1_ctx);
+    mbedtls_sha1_init(&backward_sha1_ctx);
+    mbedtls_sha1_starts(&backward_sha1_ctx);
 
     ntor_public_key.insert(ntor_public_key.end(), crypto_scalarmult_SCALARBYTES,
                            0);
@@ -118,7 +120,8 @@ public:
       mbedtls_ecp_point_free(&circuit_pub_key);
     }
 
-    mbedtls_sha1_free(&sha1_ctx);
+    mbedtls_sha1_free(&forward_sha1_ctx);
+    mbedtls_sha1_free(&backward_sha1_ctx);
 
     mbedtls_aes_free(&forward_aes_ctx);
     mbedtls_aes_free(&backward_aes_ctx);
@@ -141,14 +144,13 @@ public:
 
     std::lock_guard<std::mutex> guard(during_step);
 
-    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
-                       additional_send_buffer.end());
-    additional_send_buffer.clear();
+    while (parse_cell(return_buffer, send_buffer, initiator_log)) {
+    }
 
     for (auto stream : stream_map) {
 
       if (!stream.second.file_descriptor_pipe.has_value() ||
-          !stream.second.connected)
+          my_global_sent_window <= 0 || stream.second.stream_sent_window <= 0)
         continue;
 
       std::vector<uint8_t> data;
@@ -166,23 +168,27 @@ public:
       generate_data_relay(send_buffer, data, global_circuit_id, stream.first);
     }
 
-    if (!return_buffer.empty()) {
-      parse_cell(return_buffer, send_buffer, initiator_log);
-    }
+    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
+                       additional_send_buffer.end());
+    additional_send_buffer.clear();
   }
 
-  void parse_cell(std::vector<uint8_t> &return_buffer,
+  bool parse_cell(std::vector<uint8_t> &return_buffer,
                   std::vector<uint8_t> &send_buffer,
                   std::vector<uint8_t> &initiator_log) {
+
+    if (return_buffer.empty()) {
+      return false;
+    }
 
     uint64_t cursor = 0;
     auto circ_id = parse_uint16(return_buffer, cursor);
     if (!circ_id.has_value()) {
-      return;
+      return false;
     }
     auto command = parse_uint8(return_buffer, cursor);
     if (!command.has_value()) {
-      return;
+      return false;
     }
 
     printf("got command %i\n", command.value());
@@ -191,14 +197,14 @@ public:
 
       auto length = parse_uint16(return_buffer, cursor);
       if (!length.has_value()) {
-        return;
+        return false;
       }
 
       uint16_t real_length = ntohs(length.value());
 
       auto payload = parse_fixed_buffer(return_buffer, cursor, real_length);
       if (!payload.has_value()) {
-        return;
+        return false;
       }
 
       switch (command.value()) {
@@ -233,7 +239,7 @@ public:
     } else {
       auto payload = parse_fixed_buffer(return_buffer, cursor, CELL_BODY_LEN);
       if (!payload.has_value()) {
-        return;
+        return false;
       }
 
       switch (command.value()) {
@@ -271,7 +277,8 @@ public:
         auto relay_buffer = payload.value();
         uint64_t relay_cursor = 0;
 
-        parse_relay(relay_buffer, circ_id.value(), relay_cursor, send_buffer);
+        parse_relay(relay_buffer, ntohs(circ_id.value()), relay_cursor,
+                    send_buffer);
         break;
       }
       case 4: {
@@ -297,12 +304,14 @@ public:
     if (command.value() == 8) {
       sent_auth = true;
     }
+
+    return true;
   }
 
 private:
   std::vector<uint8_t> additional_send_buffer = {};
 
-  uint16_t global_circuit_id = 0b0000000000000010;
+  uint16_t global_circuit_id = 0b1000000000000010;
 
   void generate_cell_fixed(std::vector<uint8_t> &return_buffer,
                            uint16_t circuit_id, uint8_t command,
@@ -664,7 +673,9 @@ private:
     combined_key.insert(combined_key.end(), key2.begin(), key2.end());
     combined_key.insert(combined_key.end(), key3.begin(), key3.end());
 
-    mbedtls_sha1_update(&sha1_ctx, combined_key.data(), 20);
+    mbedtls_sha1_update(&forward_sha1_ctx, combined_key.data(), 20);
+    mbedtls_sha1_update(&backward_sha1_ctx, combined_key.data() + 20, 20);
+
     forward_encryption_key = std::vector<uint8_t>{};
     forward_encryption_key->insert(forward_encryption_key->end(),
                                    combined_key.begin() + 20 + 20,
@@ -684,6 +695,8 @@ private:
   struct TorStream {
     bool connected = false;
     std::optional<int> file_descriptor_pipe;
+    ssize_t stream_sent_window = 500;
+    ssize_t stream_recived_window = 0;
   };
   ssize_t my_global_sent_window = 1000; // 1000 if no circwindow is give
   ssize_t my_global_recived_window = 0;
@@ -925,7 +938,8 @@ private:
     generate_cell_fixed(return_buffer, circuit_id, 10, data);
   }
 
-  mbedtls_sha1_context sha1_ctx;
+  mbedtls_sha1_context forward_sha1_ctx;
+  mbedtls_sha1_context backward_sha1_ctx;
 
   mbedtls_aes_context forward_aes_ctx;
   mbedtls_aes_context backward_aes_ctx;
@@ -941,12 +955,13 @@ private:
                            uint8_t relay_command, uint16_t circuit_id,
                            uint16_t stream_id,
                            std::vector<uint8_t> command_data) {
+
+    printf("circuit_id %i\n", circuit_id);
     std::vector<uint8_t> data = {};
 
     data.push_back(relay_command);
     data.insert(data.end(), 2,
-                0); // two bytes for recognized, we shouldn't need to
-                    // encrypt/decrypt this
+                0); // two bytes for recognized
     stream_id = htons(stream_id);
     data.insert(data.end(), (uint8_t *)&stream_id,
                 (uint8_t *)&stream_id + sizeof(uint16_t));
@@ -970,34 +985,40 @@ private:
 
     data.insert(data.end(), padding_len, 0);
 
-    mbedtls_sha1_update(&sha1_ctx, data.data(), data.size());
-
-    uint8_t digest_full[20] = {};
-
-    mbedtls_sha1_context old_ctx;
-    old_ctx = sha1_ctx;
-
-    // make a new sha1 instance because we cant continusiously make hashes
-    mbedtls_sha1_init(&old_ctx);
-    mbedtls_sha1_clone(&old_ctx, &sha1_ctx);
-
-    mbedtls_sha1_finish(&old_ctx, digest_full);
-    mbedtls_sha1_free(&old_ctx);
-
-    data.erase(data.begin() + 5, data.begin() + 5 + 4);
-    data.insert(data.begin() + 5, (uint8_t *)digest_full,
-                (uint8_t *)digest_full + 4);
-
     if (!forward_encryption_key.has_value()) {
       printf("error: cannot crypto\n");
       return;
     }
 
+    if (data.size() != 509) {
+      printf("dropping payload of wrong size\n");
+      return;
+    }
+
+    mbedtls_sha1_update(&forward_sha1_ctx, data.data(), data.size());
+
+    uint8_t digest_full[20] = {};
+
+    mbedtls_sha1_context old_ctx;
+
+    // make a new sha1 instance because we cant continusiously make hashes
+    mbedtls_sha1_init(&old_ctx);
+    mbedtls_sha1_clone(&old_ctx, &forward_sha1_ctx);
+
+    mbedtls_sha1_finish(&old_ctx, digest_full);
+    mbedtls_sha1_free(&old_ctx);
+
+    printf("%02X%02X%02X%02X running digest\n", digest_full[0], digest_full[1],
+           digest_full[2], digest_full[3]);
+    memcpy(data.data() + 5, digest_full, 4);
+
     std::vector<uint8_t> encrypted_data;
     encrypted_data.insert(encrypted_data.end(), data.size(), 0);
+
     mbedtls_aes_crypt_ctr(&forward_aes_ctx, data.size(), &forward_stream_offset,
                           forward_stream_iv, forward_stream_block,
                           (const uint8_t *)data.data(), encrypted_data.data());
+
     generate_cell_fixed(send_buffer, circuit_id, 3, encrypted_data);
   }
 

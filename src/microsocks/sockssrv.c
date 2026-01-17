@@ -180,7 +180,6 @@ static int connect_socks_target(unsigned char *buf, size_t n,
   struct addrinfo *raddr = addr_choose(remote, &bind_addr);
   uint16_t stream_id = rand() % UINT16_MAX;
 
-  printf("yo2\n");
   int fd = client->make_connection(namebuf, port, stream_id);
   if (fd == -1) {
   eval_errno:
@@ -476,7 +475,6 @@ int setup_socks(int (*make_connection)(char *addr, uint16_t port,
   server = &s;
 
   while (1) {
-    printf("yo\n");
     collect(threads);
     struct client c;
     struct thread *curr = malloc(sizeof(struct thread));
