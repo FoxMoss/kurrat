@@ -318,7 +318,6 @@ static void copyloop(int fd1, int fd2) {
        available stacksize to improve throughput. */
     char buf[MIN(16 * 1024, THREAD_STACK_SIZE / 2)];
     ssize_t sent = 0, n = read(infd, buf, sizeof buf);
-    printf("from socks read %zi from pipe\n", n);
     if (n <= 0)
       return;
     while (sent < n) {
@@ -359,7 +358,6 @@ static int handshake(struct thread *t) {
   enum authmethod am;
   t->state = SS_1_CONNECTED;
   while ((n = recv(t->client.fd, buf, sizeof buf, 0)) > 0) {
-    printf("recv %i\n", t->state);
 
     switch (t->state) {
     case SS_1_CONNECTED:
@@ -386,7 +384,6 @@ static int handshake(struct thread *t) {
       break;
     case SS_3_AUTHED:
       ret = connect_socks_target(buf, n, &t->client);
-      printf("got ret %i\n", ret);
       if (ret < 0) {
         send_error(t->client.fd, ret * -1);
         return -1;

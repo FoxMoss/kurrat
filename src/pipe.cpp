@@ -19,6 +19,10 @@ int TorConnection::create_unix_socket(char *addr, uint16_t port,
                                       uint16_t stream_id) {
   std::lock_guard<std::mutex> guard(tor_connection->during_step);
 
+  if (!tor_connection->connected_to_exit) {
+    return 0;
+  }
+
   if (tor_connection == NULL) {
     printf("tor connection is null");
     return 0;
@@ -52,8 +56,6 @@ int TorConnection::create_unix_socket(char *addr, uint16_t port,
   tor_connection->generate_begin_relay_cell(
       tor_connection->additional_send_buffer, tor_connection->global_circuit_id,
       stream_id, std::string(addrport), 0);
-
-  printf("sending relay cell\n");
 
   tor_connection->stream_map[stream_id].file_descriptor_pipe = my_fd;
 

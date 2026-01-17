@@ -47,8 +47,6 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
     return false;
   }
 
-  printf("relay command %i %i\n", relay_command.value(), circuit_id);
-
   if (!stream_id.has_value() ||
       (!stream_map.contains(ntohs(stream_id.value())) &&
        ntohs(stream_id.value()) != 0)) {
@@ -98,7 +96,6 @@ bool TorConnection::generate_send_me_relay(uint16_t circuit_id,
   if (stream_id != 0 && !stream_map.contains(stream_id))
     return false;
 
-  printf("sent sendme %i!\n", stream_id);
   std::vector<uint8_t> data = {};
 
   if (stream_id == 0) {
@@ -135,7 +132,6 @@ bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
       stream_map[stream_id].file_descriptor_pipe.has_value()) {
     write(stream_map[stream_id].file_descriptor_pipe.value(),
           data_buffer.data(), data_buffer.size());
-    printf("to fd %zu\n", data_buffer.size());
   }
 
   my_global_recived_window++;
@@ -167,9 +163,6 @@ bool TorConnection::generate_data_relay(std::vector<uint8_t> &send_buffer,
 
   if (stream_map[stream_id].stream_sent_window <= 0)
     return false;
-
-  printf("global %zi local %zi\n", my_global_sent_window,
-         stream_map[stream_id].stream_sent_window);
 
   generate_relay_cell(send_buffer, 2, circuit_id, stream_id, data);
 

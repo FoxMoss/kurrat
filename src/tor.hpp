@@ -86,8 +86,6 @@ public:
     uint8_t *der_buf_cursor = der_buf + 4096;
     int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &rsa_pk);
 
-    printf("%s\n", der_buf + (4096 - der_len));
-
     local_KP_relayid_rsa.insert(local_KP_relayid_rsa.end(),
                                 (uint8_t *)der_buf + (4096 - der_len),
                                 der_buf + 4096);
@@ -167,8 +165,6 @@ public:
 
       data.erase(data.begin() + ret_size, data.end());
 
-      printf("from fd %zu\n", data.size());
-
       generate_data_relay(send_buffer, data, global_circuit_id, stream.first);
     }
   }
@@ -190,8 +186,6 @@ public:
     if (!command.has_value()) {
       return false;
     }
-
-    printf("got command %i\n", command.value());
 
     if (command.value() == 7 || command.value() >= 128) { // variable length
 
@@ -248,8 +242,6 @@ public:
         // but we should get ready to send out own packets!
 
         if (!sent_auth) {
-
-          printf("sending my auth!\n");
           generate_cert_cell(send_buffer);
           initiator_log.insert(initiator_log.end(), send_buffer.begin(),
                                send_buffer.end());
@@ -311,7 +303,7 @@ public:
 private:
   std::vector<uint8_t> additional_send_buffer = {};
 
-  uint16_t global_circuit_id = 0b1000000000000010;
+  uint16_t global_circuit_id = 0b0000000000000010;
 
   void generate_cell_fixed(std::vector<uint8_t> &return_buffer,
                            uint16_t circuit_id, uint8_t command,
@@ -409,13 +401,8 @@ private:
     int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &crt.pk);
     mbedtls_x509_crt_free(&crt);
 
-    FILE *rsa_file = fopen("rsa.log", "w");
-    printf("%s\n", der_buf + 4096 - der_len);
-
-    fwrite(der_buf + 4096 - der_len, der_len, 1, rsa_file);
     remote_KP_relayid_rsa.insert(remote_KP_relayid_rsa.end(),
                                  der_buf + 4096 - der_len, der_buf + 4096);
-    fclose(rsa_file);
   }
 
   void parse_rsa_cert(std::vector<uint8_t> &cert_rsa_buffer) {
@@ -450,40 +437,29 @@ private:
 
       switch ((CertType)cert_type.value()) {
       case TLS_LINK_X509:
-        printf("TLS_LINK_X509 = 0x01\n");
         break;
       case RSA_ID_X509:
         parse_x509_cert(cert.value());
 
-        printf("RSA_ID_X509 = 0x02\n");
         break;
       case LINK_AUTH_X509:
-        printf("LINK_AUTH_X509 = 0x03\n");
         break;
       case IDENTITY_V_SIGNING:
-        printf("IDENTITY_V_SIGNING = 0x04\n");
         break;
       case SIGNING_V_TLS_CERT:
-        printf("SIGNING_V_TLS_CERT = 0x05\n");
         break;
       case SIGNING_V_LINK_AUTH:
-        printf("SIGNING_V_LINK_AUTH = 0x06\n");
         break;
       case RSA_ID_V_IDENTITY:
         parse_rsa_cert(cert.value());
-        printf("RSA_ID_V_IDENTITY = 0x07\n");
         break;
       case BLINDED_ID_V_SIGNING:
-        printf("BLINDED_ID_V_SIGNING = 0x08\n");
         break;
       case HS_IP_V_SIGNING:
-        printf("HS_IP_V_SIGNING = 0x09\n");
         break;
       case NTOR_CC_IDENTITY:
-        printf("NTOR_CC_IDENTITY = 0x0A\n");
         break;
       case HS_IP_CC_SIGNING:
-        printf("HS_IP_CC_SIGNING = 0x0B\n");
         break;
       }
     }
@@ -523,7 +499,6 @@ private:
                  // one
     }
 
-    printf("adding challenge\n");
     auth_challenges.push_back(challenge.value());
 
     return true;
@@ -802,7 +777,6 @@ private:
       // TODO bad
       auth_buffer.insert(auth_buffer.end(), keying_material.begin(),
                          keying_material.end());
-      printf("keying_material %zu\n", keying_material.size());
 
       std::vector<uint8_t> random_buf;
       random_buf.insert(random_buf.end(), 24, 0);
@@ -827,10 +801,14 @@ private:
       data.insert(data.end(), auth_buffer.begin(), auth_buffer.end());
 
       generate_cell_variable(send_buffer, 0, 131, data);
+
+      connected_to_exit = true;
+      printf("connected to exit node and ready to accept\n");
     }
 
     auth_challenges.clear();
   }
+  bool connected_to_exit = false;
 
   void generate_cert_cell(std::vector<uint8_t> &send_buffer) {
     std::vector<uint8_t> data = {};
@@ -956,7 +934,6 @@ private:
                            uint16_t stream_id,
                            std::vector<uint8_t> command_data) {
 
-    printf("circuit_id %i\n", circuit_id);
     std::vector<uint8_t> data = {};
 
     data.push_back(relay_command);
@@ -1008,8 +985,6 @@ private:
     mbedtls_sha1_finish(&old_ctx, digest_full);
     mbedtls_sha1_free(&old_ctx);
 
-    printf("%02X%02X%02X%02X running digest\n", digest_full[0], digest_full[1],
-           digest_full[2], digest_full[3]);
     memcpy(data.data() + 5, digest_full, 4);
 
     std::vector<uint8_t> encrypted_data;
