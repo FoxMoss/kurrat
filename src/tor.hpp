@@ -147,6 +147,10 @@ public:
     while (parse_cell(return_buffer, send_buffer, initiator_log)) {
     }
 
+    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
+                       additional_send_buffer.end());
+    additional_send_buffer.clear();
+
     for (auto stream : stream_map) {
 
       if (!stream.second.file_descriptor_pipe.has_value() ||
@@ -167,10 +171,6 @@ public:
 
       generate_data_relay(send_buffer, data, global_circuit_id, stream.first);
     }
-
-    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
-                       additional_send_buffer.end());
-    additional_send_buffer.clear();
   }
 
   bool parse_cell(std::vector<uint8_t> &return_buffer,
