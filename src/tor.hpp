@@ -51,15 +51,49 @@ extern "C" {
 
 class TorConnection {
 public:
-  // curl interplay
   static int create_unix_socket(char *addr, uint16_t port, uint16_t stream_id);
+
+  TorConnection(const TorConnection &other)
+      : local_KP_relayid_rsa(other.local_KP_relayid_rsa),
+        local_KP_relayid_ed(other.local_KP_relayid_ed),
+        local_certs(other.local_certs), responder_cert(other.responder_cert),
+        keying_material(other.keying_material),
+        link_secret_key(other.link_secret_key),
+        link_public_key(other.link_public_key), my_addr(other.my_addr),
+        other_addr(other.other_addr), secret_ntor(other.secret_ntor),
+        remote_identity_digest(other.remote_identity_digest),
+        remote_ntor_pub_key(other.remote_ntor_pub_key) {
+
+    mbedtls_pk_init(&rsa_pk);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_entropy_init(&entropy);
+
+    mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+                          (const unsigned char *)"client", 6);
+    psa_crypto_init();
+    mbedtls_sha1_init(&forward_sha1_ctx);
+    mbedtls_sha1_starts(&forward_sha1_ctx);
+    mbedtls_sha1_init(&backward_sha1_ctx);
+    mbedtls_sha1_starts(&backward_sha1_ctx);
+
+    ntor_public_key.insert(ntor_public_key.end(), crypto_scalarmult_SCALARBYTES,
+                           0);
+    crypto_scalarmult_curve25519_base(ntor_public_key.data(),
+                                      secret_ntor.data());
+
+    mbedtls_ecp_group_init(&grp);
+    mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519);
+
+    mbedtls_aes_init(&forward_aes_ctx);
+    mbedtls_aes_init(&backward_aes_ctx);
+  }
 
   TorConnection(
       std::vector<std::pair<uint8_t, std::vector<uint8_t>>> local_certs,
       std::vector<uint8_t> local_KP_relayid_ed,
       std::vector<uint8_t> link_secret_key,
       std::vector<uint8_t> link_public_key, uint32_t my_addr,
-      uint32_t other_addr, std::vector<uint8_t> rsa_secret_key,
+      uint32_t other_addr, mbedtls_pk_context *rsa_secret_key,
       std::vector<uint8_t> responder_cert, std::vector<uint8_t> keying_material,
       std::vector<uint8_t> secret_ntor,
       std::vector<uint8_t> remote_identity_digest,
@@ -79,12 +113,10 @@ public:
     mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                           (const unsigned char *)"client", 6);
 
-    mbedtls_pk_parse_key(&rsa_pk, rsa_secret_key.data(), rsa_secret_key.size(),
-                         NULL, 0, mbedtls_ctr_drbg_random, &ctr_drbg);
-
     uint8_t der_buf[4096];
     uint8_t *der_buf_cursor = der_buf + 4096;
-    int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &rsa_pk);
+    int der_len =
+        mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, rsa_secret_key);
 
     local_KP_relayid_rsa.insert(local_KP_relayid_rsa.end(),
                                 (uint8_t *)der_buf + (4096 - der_len),
@@ -111,7 +143,6 @@ public:
 
     mbedtls_entropy_free(&entropy);
     mbedtls_ctr_drbg_free(&ctr_drbg);
-    mbedtls_pk_free(&rsa_pk);
 
     if (generated_circuit) {
       mbedtls_mpi_free(&circuit_priv_key);
@@ -507,6 +538,8 @@ private:
   void parse_destroy(std::vector<uint8_t> &destroy_buffer, uint64_t &cursor) {
     auto destroy_reason = parse_uint8(destroy_buffer, cursor);
     printf("destroyed with reason, %i\n", destroy_reason.value());
+    connected_to_exit = false;
+    printf("disconnected from exit node.\n");
   }
 
   void parse_created(std::vector<uint8_t> &created_buffer, uint64_t &cursor) {

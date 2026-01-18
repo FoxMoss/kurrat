@@ -56,7 +56,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
   switch (relay_command.value()) {
   case 4: // connected. no parsing needed!
     stream_map[ntohs(stream_id.value())].connected = true;
-    printf("connected to address through proxy!\n");
+    printf("a stream has connected!\n");
     break;
 
   case 5: // sendme, literally no data to parse
@@ -85,7 +85,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 bool TorConnection::parse_end_relay(std::vector<uint8_t> &end_buffer,
                                     uint64_t &cursor) {
   auto end_reason = parse_uint8(end_buffer, cursor);
-  printf("end reason %i\n", end_reason.value());
+  printf("stream has closed with end reason %i\n", end_reason.value());
 
   return true;
 }

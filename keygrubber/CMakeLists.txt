@@ -1,15 +1,3 @@
-include(FetchContent)
-FetchContent_Declare(
-    mbedtls 
-    GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls
-    GIT_TAG master 
-    GIT_SHALLOW true
-    GIT_PROGRESS TRUE
-)
-FetchContent_MakeAvailable(mbedtls)
-
-add_compile_options(-std=c++23)
-
 add_executable(keygrubber
  main.cpp
 )
