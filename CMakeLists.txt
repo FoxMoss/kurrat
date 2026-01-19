@@ -3,8 +3,9 @@ set(CMAKE_CXX_STANDARD 20)
 
 project(Kurrat)
 
-set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
-set(CMAKE_C_FLAGS_DEBUG  "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
+# set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
+# set(CMAKE_C_FLAGS_DEBUG  "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
+
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
 
@@ -55,6 +56,16 @@ if(NOT CURL_FOUND)
   )
   FetchContent_MakeAvailable(CURL)
 endif()
+
+include(FetchContent)
+FetchContent_Declare(
+    maxminddb 
+    GIT_REPOSITORY https://github.com/maxmind/libmaxminddb
+    GIT_TAG 1.12.2
+    GIT_PROGRESS TRUE
+)
+
+FetchContent_MakeAvailable(maxminddb)
 
 add_subdirectory(src)
 add_subdirectory(keygrubber)

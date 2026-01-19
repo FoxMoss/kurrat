@@ -1,3 +1,4 @@
+#include "mbedtls/bignum.h"
 #include <filesystem>
 #include <thread>
 extern "C" {
@@ -50,6 +51,14 @@ make_tor_connection(mbedtls_pk_context secret_id_key,
                     std::string remote_ntor_b64,
                     std::string remote_identity_b64, uint32_t other_addr_raw,
                     mbedtls_ssl_context ssl_context) {
+
+  // rsa modulus
+  mbedtls_mpi a_n;
+  mbedtls_mpi_init(&a_n);
+  mbedtls_rsa_export(mbedtls_pk_rsa(secret_id_key), &a_n, NULL, NULL, NULL,
+                     NULL);
+
+  // public relay id key
   uint8_t der_buf[4096];
   uint8_t *der_buf_cursor = der_buf + 4096;
   int der_len =
@@ -136,15 +145,18 @@ make_tor_connection(mbedtls_pk_context secret_id_key,
 
   // start the tor connection
 
-  TorConnection connection = TorConnection(
-      {{0x04, id_cert.value()},
-       {0x06, link_cert->cert},
-       /*{0x05, tls_cert},*/
-       {0x02, rsa_id_cert.value()},
-       {0x07, cross_cert.value()}},
-      id_public_key, link_cert->link_secret_key, link_cert->link_public_key,
-      my_addr_raw, other_addr_raw, &secret_id_key, responder_data,
-      keying_material, ntor_key, remote_identity_digest, remote_ntor_pub_key);
+  TorConnection connection =
+      TorConnection({{0x04, id_cert.value()},
+                     {0x06, link_cert->cert},
+                     /*{0x05, tls_cert},*/
+                     {0x02, rsa_id_cert.value()},
+                     {0x07, cross_cert.value()}},
+                    id_public_key, link_cert->link_secret_key,
+                    link_cert->link_public_key, my_addr_raw, other_addr_raw,
+                    &secret_id_key, responder_data, keying_material, ntor_key,
+                    remote_identity_digest, remote_ntor_pub_key, a_n);
+
+  mbedtls_mpi_free(&a_n);
 
   return connection;
 }

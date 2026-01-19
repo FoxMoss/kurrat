@@ -64,7 +64,6 @@ public:
         remote_identity_digest(other.remote_identity_digest),
         remote_ntor_pub_key(other.remote_ntor_pub_key) {
 
-    mbedtls_pk_init(&rsa_pk);
     mbedtls_ctr_drbg_init(&ctr_drbg);
     mbedtls_entropy_init(&entropy);
 
@@ -86,6 +85,10 @@ public:
 
     mbedtls_aes_init(&forward_aes_ctx);
     mbedtls_aes_init(&backward_aes_ctx);
+
+    mbedtls_mpi_init(&local_rsa_n);
+    mbedtls_mpi_init(&remote_rsa_n);
+    mbedtls_mpi_copy(&local_rsa_n, (const mbedtls_mpi *)&other.local_rsa_n);
   }
 
   TorConnection(
@@ -97,7 +100,7 @@ public:
       std::vector<uint8_t> responder_cert, std::vector<uint8_t> keying_material,
       std::vector<uint8_t> secret_ntor,
       std::vector<uint8_t> remote_identity_digest,
-      std::vector<uint8_t> remote_ntor_pub_key)
+      std::vector<uint8_t> remote_ntor_pub_key, mbedtls_mpi local_rsa_modulus)
       : local_KP_relayid_ed(local_KP_relayid_ed), local_certs(local_certs),
         responder_cert(responder_cert), keying_material(keying_material),
         link_secret_key(link_secret_key), link_public_key(link_public_key),
@@ -106,7 +109,6 @@ public:
         remote_identity_digest(remote_identity_digest),
         remote_ntor_pub_key(remote_ntor_pub_key) {
 
-    mbedtls_pk_init(&rsa_pk);
     mbedtls_ctr_drbg_init(&ctr_drbg);
     mbedtls_entropy_init(&entropy);
 
@@ -137,7 +139,12 @@ public:
 
     mbedtls_aes_init(&forward_aes_ctx);
     mbedtls_aes_init(&backward_aes_ctx);
+
+    mbedtls_mpi_init(&local_rsa_n);
+    mbedtls_mpi_init(&remote_rsa_n);
+    mbedtls_mpi_copy(&local_rsa_n, (const mbedtls_mpi *)&local_rsa_modulus);
   }
+
   ~TorConnection() {
     mbedtls_ecp_group_free(&grp);
 
@@ -154,7 +161,12 @@ public:
 
     mbedtls_aes_free(&forward_aes_ctx);
     mbedtls_aes_free(&backward_aes_ctx);
+
+    mbedtls_mpi_free(&local_rsa_n);
+    mbedtls_mpi_free(&remote_rsa_n);
   }
+
+  bool is_destroyed() { return destroyed; }
 
   void generate_versions_cell(std::vector<uint8_t> &return_buffer) {
     std::vector<uint8_t> data = {};
@@ -332,6 +344,9 @@ public:
   }
 
 private:
+  mbedtls_mpi local_rsa_n;
+  mbedtls_mpi remote_rsa_n;
+
   std::vector<uint8_t> additional_send_buffer = {};
 
   uint16_t global_circuit_id = 0b0000000000000010;
@@ -430,7 +445,16 @@ private:
     uint8_t *der_buf_cursor = der_buf + 4096;
     // tf do we write to the end???
     int der_len = mbedtls_pk_write_pubkey(&der_buf_cursor, der_buf, &crt.pk);
+
+    mbedtls_rsa_export(mbedtls_pk_rsa(crt.pk), &remote_rsa_n, NULL, NULL, NULL,
+                       NULL);
+
     mbedtls_x509_crt_free(&crt);
+
+    // set circuit id accordingly
+    global_circuit_id = (mbedtls_mpi_cmp_mpi(&local_rsa_n, &remote_rsa_n) == 1
+                             ? 0b1000000000000010
+                             : 0b0000000000000010);
 
     remote_KP_relayid_rsa.insert(remote_KP_relayid_rsa.end(),
                                  der_buf + 4096 - der_len, der_buf + 4096);
@@ -538,6 +562,7 @@ private:
   void parse_destroy(std::vector<uint8_t> &destroy_buffer, uint64_t &cursor) {
     auto destroy_reason = parse_uint8(destroy_buffer, cursor);
     printf("destroyed with reason, %i\n", destroy_reason.value());
+    destroyed = true;
     connected_to_exit = false;
     printf("disconnected from exit node.\n");
   }
@@ -549,6 +574,7 @@ private:
         parse_fixed_buffer(created_buffer, cursor, 32);
 
     mbedtls_mpi circuit_shared_secret;
+    mbedtls_mpi_init(&circuit_shared_secret);
 
     mbedtls_ecp_point server_circuit_key_public;
     mbedtls_ecp_point_init(&server_circuit_key_public);
@@ -568,6 +594,7 @@ private:
                              circuit_shared_secret_bytes.data(), 32);
 
     mbedtls_mpi ntor_shared_secret;
+    mbedtls_mpi_init(&ntor_shared_secret);
 
     mbedtls_ecp_point server_ntor_key_public;
     mbedtls_ecp_point_init(&server_ntor_key_public);
@@ -580,8 +607,7 @@ private:
                                 &server_ntor_key_public, &circuit_priv_key,
                                 mbedtls_ctr_drbg_random, &ctr_drbg);
 
-    std::vector<uint8_t> ntor_shared_secret_bytes;
-    ntor_shared_secret_bytes.insert(ntor_shared_secret_bytes.end(), 32, 0);
+    std::vector<uint8_t> ntor_shared_secret_bytes(32, 0);
     mbedtls_mpi_write_binary(&ntor_shared_secret,
                              ntor_shared_secret_bytes.data(), 32);
 
@@ -590,15 +616,12 @@ private:
 
     // why is it reversed??
     // no idea, little endian issue maybe?
-    secret_input.insert(
-        secret_input.end(),
-        std::reverse_iterator(circuit_shared_secret_bytes.end()),
-        std::reverse_iterator(circuit_shared_secret_bytes.begin()));
+    secret_input.insert(secret_input.end(),
+                        circuit_shared_secret_bytes.rbegin(),
+                        circuit_shared_secret_bytes.rend());
 
-    secret_input.insert(
-        secret_input.end(),
-        std::reverse_iterator(ntor_shared_secret_bytes.end()),
-        std::reverse_iterator(ntor_shared_secret_bytes.begin()));
+    secret_input.insert(secret_input.end(), ntor_shared_secret_bytes.rbegin(),
+                        ntor_shared_secret_bytes.rend());
 
     secret_input.insert(secret_input.end(), remote_identity_digest.begin(),
                         remote_identity_digest.end());
@@ -606,8 +629,7 @@ private:
     secret_input.insert(secret_input.end(), remote_ntor_pub_key.begin(),
                         remote_ntor_pub_key.end());
 
-    std::vector<uint8_t> circuit_pub_key_bytes;
-    circuit_pub_key_bytes.insert(circuit_pub_key_bytes.end(), 32, 0);
+    std::vector<uint8_t> circuit_pub_key_bytes(32, 0);
 
     size_t olen = 0;
     mbedtls_ecp_point_write_binary(
@@ -626,8 +648,7 @@ private:
 
     std::string key_extract = proto_id + ":key_extract";
 
-    std::vector<uint8_t> key_seed;
-    key_seed.insert(key_seed.end(), 32, 0);
+    std::vector<uint8_t> key_seed(32, 0);
     mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
                     (const uint8_t *)key_extract.data(), key_extract.size(),
                     secret_input.data(), secret_input.size(), key_seed.data());
@@ -649,8 +670,7 @@ private:
 #define key_type uint8_t
 
     // K1
-    std::vector<key_type> key1;
-    key1.insert(key1.end(), key_size, 0);
+    std::vector<key_type> key1(key_size, 0);
     mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
                     key_expand1.data(), key_expand1.size(), key1.data());
 
@@ -660,8 +680,7 @@ private:
     key_expand2.insert(key_expand2.end(), key_expand.begin(), key_expand.end());
     key_expand2.push_back(2);
 
-    std::vector<key_type> key2;
-    key2.insert(key2.end(), key_size, 0);
+    std::vector<key_type> key2(key_size, 0);
     mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
                     key_expand2.data(), key_expand2.size(), key2.data());
 
@@ -671,8 +690,7 @@ private:
     key_expand3.insert(key_expand3.end(), key_expand.begin(), key_expand.end());
     key_expand3.push_back(3);
 
-    std::vector<key_type> key3;
-    key3.insert(key3.end(), key_size, 0);
+    std::vector<key_type> key3(key_size, 0);
     mbedtls_md_hmac(hash_func, key_seed.data(), key_seed.size(),
                     key_expand3.data(), key_expand3.size(), key3.data());
 
@@ -748,7 +766,6 @@ private:
   uint8_t backward_stream_block[16] = {};
   uint8_t backward_stream_iv[16] = {};
 
-  mbedtls_pk_context rsa_pk;
   std::vector<uint8_t> responder_cert;
   std::vector<uint8_t> keying_material;
   std::vector<uint8_t> link_secret_key;
@@ -811,8 +828,7 @@ private:
       auth_buffer.insert(auth_buffer.end(), keying_material.begin(),
                          keying_material.end());
 
-      std::vector<uint8_t> random_buf;
-      random_buf.insert(random_buf.end(), 24, 0);
+      std::vector<uint8_t> random_buf(24, 0);
       psa_generate_random(random_buf.data(), random_buf.size());
 
       auth_buffer.insert(auth_buffer.end(), random_buf.begin(),
@@ -842,6 +858,7 @@ private:
     auth_challenges.clear();
   }
   bool connected_to_exit = false;
+  bool destroyed = false;
 
   void generate_cert_cell(std::vector<uint8_t> &send_buffer) {
     std::vector<uint8_t> data = {};
@@ -931,8 +948,7 @@ private:
     circuit_priv_key = temp_priv_key;
     circuit_pub_key = temp_pub_key_raw;
 
-    std::vector<uint8_t> temp_pub_key;
-    temp_pub_key.insert(temp_pub_key.end(), 32, 0);
+    std::vector<uint8_t> temp_pub_key(32, 0);
     size_t olen = 0;
     mbedtls_ecp_point_write_binary(&grp, &temp_pub_key_raw,
                                    MBEDTLS_ECP_PF_UNCOMPRESSED, &olen,
@@ -1020,8 +1036,7 @@ private:
 
     memcpy(data.data() + 5, digest_full, 4);
 
-    std::vector<uint8_t> encrypted_data;
-    encrypted_data.insert(encrypted_data.end(), data.size(), 0);
+    std::vector<uint8_t> encrypted_data(data.size(), 0);
 
     mbedtls_aes_crypt_ctr(&forward_aes_ctx, data.size(), &forward_stream_offset,
                           forward_stream_iv, forward_stream_block,

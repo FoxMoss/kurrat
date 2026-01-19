@@ -1,5 +1,5 @@
 
-#include "helper.hpp"
+#include "exitnodes.hpp"
 #include "mbedtls/base64.h"
 #include <algorithm>
 #include <array>
@@ -11,10 +11,13 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <exception>
+#include <map>
+#include <maxminddb.h>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 std::array<std::string, 9> consensus_hosts = {
@@ -36,11 +39,14 @@ int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
   return 0;
 }
 
-std::optional<std::string> find_exit_node() {
+std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
+                                       std::optional<std::string> place) {
 
   std::stringstream consensus_str;
   CURLcode code;
   std::string host;
+  srand(time(NULL));
+
   do {
     consensus_str.clear();
     host = consensus_hosts[rand() % consensus_hosts.size()];
@@ -65,16 +71,6 @@ std::optional<std::string> find_exit_node() {
   } while (code != CURLE_OK);
 
   std::string line;
-
-  struct ExitInfo {
-    std::string name;
-    std::string idenity_key;
-    std::string ip;
-    std::string port;
-
-    std::string ntor_key;
-    size_t bandwidth_size;
-  };
 
   std::vector<ExitInfo> exit_canidates;
 
@@ -159,15 +155,56 @@ std::optional<std::string> find_exit_node() {
     }
   }
 
-  srand(0);
   std::sort(exit_canidates.begin(), exit_canidates.end(),
             [](ExitInfo &a, ExitInfo &b) {
-              return a.bandwidth_size > b.bandwidth_size + rand() % 1000;
+              return a.bandwidth_size > b.bandwidth_size;
             });
 
+  // ranking exit node code
+  // std::map<std::string, size_t> country_popularity;
   std::stringstream exit_data_str;
-  for (auto exit : exit_canidates) {
-    printf("%s:%s\n", exit.ip.c_str(), exit.port.c_str());
+
+  for (auto &exit : exit_canidates) {
+    if (rand() % 10 != 0 && !place.has_value()) // dont always use the same exit
+      continue;
+
+    if (mmdb.has_value()) {
+
+      int gai_error, mmdb_error;
+      MMDB_lookup_result_s result = MMDB_lookup_string(
+          &mmdb.value(), exit.ip.c_str(), &gai_error, &mmdb_error);
+
+      if (MMDB_SUCCESS != mmdb_error || 0 != gai_error || !result.found_entry) {
+        printf("couldnt geolocate exit node %s\n", exit.ip.c_str());
+        continue;
+      }
+
+      MMDB_entry_data_s entry_data;
+      int status = MMDB_get_value(&result.entry, &entry_data, "country",
+                                  "names", "en", NULL);
+      if (status != MMDB_SUCCESS || !entry_data.has_data) {
+        printf("couldnt match exit node to place %s\n", exit.ip.c_str());
+        continue;
+      }
+
+      std::string place_name;
+      place_name.insert(place_name.end(), entry_data.utf8_string,
+                        entry_data.utf8_string + entry_data.data_size);
+      // ranking exit node code
+      // country_popularity[place_name]++;
+      // continue;
+
+      if (place.has_value() && place != place_name) {
+        continue;
+      }
+
+      printf("trying %s:%s from %s\n", exit.ip.c_str(), exit.port.c_str(),
+             place_name.c_str());
+
+    } else {
+
+      printf("trying %s:%s\n", exit.ip.c_str(), exit.port.c_str());
+    }
 
     if (exit.idenity_key.size() != 27) {
       continue;
@@ -205,8 +242,6 @@ std::optional<std::string> find_exit_node() {
              remote_identity_digest[16], remote_identity_digest[17],
              remote_identity_digest[18], remote_identity_digest[19]);
 
-    printf("%s\n", identity_hex);
-
     auto handle = curl_easy_init();
 
     curl_easy_setopt(
@@ -224,8 +259,58 @@ std::optional<std::string> find_exit_node() {
     code = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
 
-    return {};
+    if (code != CURLE_OK) {
+      continue;
+    }
+
+    while (std::getline(exit_data_str, line)) {
+      if (line.size() < 5) {
+        continue;
+      }
+
+      line.push_back(' ');
+
+      std::string segement;
+      std::string first_segment;
+      size_t index = 0;
+      for (auto c : line) {
+        if (c == ' ' || c == 0) {
+
+          if (first_segment == "ntor-onion-key" && index == 1) {
+            exit.ntor_key = segement;
+            return exit;
+          }
+
+          if (index == 0) {
+            first_segment = segement;
+          }
+          segement.clear();
+          index++;
+          continue;
+        }
+        segement.push_back(c);
+      }
+    }
   }
+
+  // Ranking exit node code
+  // std::vector<std::pair<std::string, size_t>> sorted_map;
+  //
+  // for (auto country : country_popularity) {
+  //   sorted_map.push_back(country);
+  // }
+  //
+  // std::sort(
+  //     sorted_map.begin(), sorted_map.end(),
+  //     [](std::pair<std::string, size_t> &a, std::pair<std::string, size_t>
+  //     &b) {
+  //       return a.second > b.second;
+  //     });
+  //
+  // printf("\n\nCountries of exit nodes ranked:\n");
+  // for (auto country : sorted_map) {
+  //   printf("%s: %zu\n", country.first.c_str(), country.second);
+  // }
 
   return {};
 }
