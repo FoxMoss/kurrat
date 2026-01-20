@@ -1,4 +1,5 @@
 #include "tor.hpp"
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -130,8 +131,16 @@ bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
 
   if (stream_map.contains(stream_id) &&
       stream_map[stream_id].file_descriptor_pipe.has_value()) {
-    write(stream_map[stream_id].file_descriptor_pipe.value(),
-          data_buffer.data(), data_buffer.size());
+    int error = write(stream_map[stream_id].file_descriptor_pipe.value(),
+                      data_buffer.data(), data_buffer.size());
+    if (error == -EPIPE) {
+      printf("silenty closed socket\n");
+      if (stream_map[stream_id].file_descriptor_pipe.has_value())
+        close(stream_map[stream_id].file_descriptor_pipe.value());
+
+      stream_map.erase(stream_id);
+      return false;
+    }
   }
 
   my_global_recived_window++;
