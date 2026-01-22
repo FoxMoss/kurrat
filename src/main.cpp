@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <fcntl.h>
 #include <linux/tls.h>
 #include <maxminddb.h>
 #include <mbedtls/aes.h>
@@ -24,10 +25,58 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
+
+int no_retry_mbedtls_net_connect(mbedtls_net_context *ctx, const char *host,
+                                 const char *port, int proto) {
+  int ret;
+  struct addrinfo hints, *addr_list, *cur;
+
+  /* Do name resolution with both IPv6 and IPv4 */
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = proto == MBEDTLS_NET_PROTO_UDP ? SOCK_DGRAM : SOCK_STREAM;
+  hints.ai_protocol =
+      proto == MBEDTLS_NET_PROTO_UDP ? IPPROTO_UDP : IPPROTO_TCP;
+
+  if (getaddrinfo(host, port, &hints, &addr_list) != 0) {
+    return (MBEDTLS_ERR_NET_UNKNOWN_HOST);
+  }
+
+  /* Try the sockaddrs until a connection succeeds */
+  ret = MBEDTLS_ERR_NET_UNKNOWN_HOST;
+  for (cur = addr_list; cur != NULL; cur = cur->ai_next) {
+    ctx->fd = (int)socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
+    if (ctx->fd < 0) {
+      ret = MBEDTLS_ERR_NET_SOCKET_FAILED;
+      continue;
+    }
+
+    // https://stackoverflow.com/a/46473173
+    struct timeval timeout;
+    timeout.tv_sec = 1; // after 7 seconds connect() will timeout
+    timeout.tv_usec = 0;
+    setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+    if (connect(ctx->fd, cur->ai_addr, cur->ai_addrlen) == 0) {
+      ret = 0;
+      break;
+    }
+
+    setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, NULL, 0);
+
+    close(ctx->fd);
+    ret = MBEDTLS_ERR_NET_CONNECT_FAILED;
+  }
+
+  freeaddrinfo(addr_list);
+
+  return (ret);
+}
 
 /*
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
@@ -103,7 +152,14 @@ int main(int argc, char **argv) {
     }
   }
 
-  auto exit_node = find_exit_node(mmdb, country);
+  auto exit_canidates = grab_consensus(mmdb, country);
+  if (!exit_canidates.has_value()) {
+    printf("failed to select exit node\n");
+    return 1;
+  }
+
+  auto exit_node = find_exit_node(mmdb, country, exit_canidates->second,
+                                  exit_canidates->first);
 
   if (maxmind_path.has_value()) {
     MMDB_close(&mmdb.value());
@@ -117,6 +173,8 @@ int main(int argc, char **argv) {
   std::thread socks_thread(
       [] { setup_socks(TorConnection::create_unix_socket); });
   socks_thread.detach();
+
+  size_t connection_restarts = 0;
 
   while (true) {
 
@@ -132,6 +190,12 @@ int main(int argc, char **argv) {
     mbedtls_entropy_init(&entropy);
     mbedtls_ctr_drbg_init(&ctr_drbg);
 
+    auto keys_parsed = parse_keys_from_folder(key_path, &ctr_drbg);
+    if (!keys_parsed.has_value()) {
+      printf("error parsing keys: %s\n", keys_parsed.error().c_str());
+      return -1;
+    }
+
     mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                           (const unsigned char *)"client", 6);
 
@@ -144,8 +208,16 @@ int main(int argc, char **argv) {
     // std::string remote_ntor_b64 =
     // "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
 
-    mbedtls_net_connect(&server_ctx, other_addr_str.c_str(),
-                        exit_node->port.c_str(), MBEDTLS_NET_PROTO_TCP);
+    if (no_retry_mbedtls_net_connect(&server_ctx, other_addr_str.c_str(),
+                                     exit_node->port.c_str(),
+                                     MBEDTLS_NET_PROTO_TCP) != 0) {
+      do {
+        exit_node = find_exit_node(mmdb, country, exit_canidates->second,
+                                   exit_canidates->first, connection_restarts);
+      } while (!exit_node.has_value());
+
+      goto end_loop;
+    }
     mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
                                 MBEDTLS_SSL_TRANSPORT_STREAM,
                                 MBEDTLS_SSL_PRESET_DEFAULT);
@@ -158,81 +230,74 @@ int main(int argc, char **argv) {
     mbedtls_ssl_set_bio(&ssl, &server_ctx, mbedtls_net_send, mbedtls_net_recv,
                         NULL);
 
-    int handshake_ret = mbedtls_ssl_handshake(&ssl);
-
-    while (handshake_ret != 0) {
-      if (handshake_ret != MBEDTLS_ERR_SSL_WANT_READ &&
-          handshake_ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-        printf("error\n");
-        break;
-      }
-    }
-    mbedtls_net_set_nonblock(&server_ctx);
-
-    // reduce size format of ip addresses
-
-    struct in_addr other_addr;
-    inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
-    uint32_t other_addr_raw = other_addr.s_addr;
-
-    auto keys_parsed = parse_keys_from_folder(key_path, &ctr_drbg);
-    if (!keys_parsed.has_value()) {
-      printf("error parsing keys: %s\n", keys_parsed.error().c_str());
-      return -1;
-    }
-    auto connection_opt = make_tor_connection(
-        keys_parsed->secret_id_key, keys_parsed->master_id_secret_key_raw,
-        keys_parsed->signing_secret_key, keys_parsed->ntor_key, &ctr_drbg,
-        remote_ntor_b64, remote_identity_b64, other_addr_raw, ssl);
-
-    if (!connection_opt.has_value()) {
-      printf("error creating connection: %s\n", connection_opt.error().c_str());
-      return -1;
+    if (mbedtls_ssl_handshake(&ssl) != 0) {
+      goto end_loop;
     }
 
-    auto connection = connection_opt.value();
-    set_global_conn(&connection);
+    {
+      mbedtls_net_set_nonblock(&server_ctx);
 
-    std::vector<uint8_t> send_buffer = {};
-    std::vector<uint8_t> initiator_log = {};
-    connection.generate_versions_cell(send_buffer);
+      // reduce size format of ip addresses
 
-    mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
-    initiator_log.insert(initiator_log.end(), send_buffer.begin(),
-                         send_buffer.end());
-    send_buffer.clear();
+      struct in_addr other_addr;
+      inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
+      uint32_t other_addr_raw = other_addr.s_addr;
 
-    std::vector<uint8_t> read_buffer;
-    int size;
+      auto connection_opt = make_tor_connection(
+          keys_parsed->secret_id_key, keys_parsed->master_id_secret_key_raw,
+          keys_parsed->signing_secret_key, keys_parsed->ntor_key, &ctr_drbg,
+          remote_ntor_b64, remote_identity_b64, other_addr_raw, ssl);
 
-    while (true) {
-      if (connection.is_destroyed() || killed_manually) {
-        goto end_loop;
+      if (!connection_opt.has_value()) {
+        printf("error creating connection: %s\n",
+               connection_opt.error().c_str());
+        return -1;
       }
 
-      connection.step(read_buffer, send_buffer, initiator_log);
+      auto connection = connection_opt.value();
+      set_global_conn(&connection);
 
-      if (!send_buffer.empty()) {
+      std::vector<uint8_t> send_buffer = {};
+      std::vector<uint8_t> initiator_log = {};
+      connection.generate_versions_cell(send_buffer);
 
-        mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+      mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+      initiator_log.insert(initiator_log.end(), send_buffer.begin(),
+                           send_buffer.end());
+      send_buffer.clear();
 
-        send_buffer.clear();
-      }
+      std::vector<uint8_t> read_buffer;
+      int size;
 
-      unsigned char buf[256];
+      while (true) {
+        if (connection.is_destroyed() || killed_manually) {
+          goto end_loop;
+        }
 
-      size = mbedtls_ssl_read(&ssl, buf, 256);
-      if (size == 0) {
-        continue;
-      }
-      if (size <= 0) {
-        if (errno == EAGAIN) {
+        connection.step(read_buffer, send_buffer, initiator_log);
+
+        if (!send_buffer.empty()) {
+
+          mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
+
+          send_buffer.clear();
+        }
+
+        unsigned char buf[256];
+
+        size = mbedtls_ssl_read(&ssl, buf, 256);
+        if (size == 0) {
           continue;
         }
-        break;
-      }
+        if (size <= 0) {
+          if (errno == EAGAIN) {
+            continue;
+          }
+          break;
+        }
 
-      read_buffer.insert(read_buffer.end(), buf, buf + size);
+        read_buffer.insert(read_buffer.end(), buf, buf + size);
+      }
     }
 
   end_loop:
@@ -247,5 +312,6 @@ int main(int argc, char **argv) {
       return 0;
     }
     printf("restarting connection\n");
+    connection_restarts++;
   }
 }

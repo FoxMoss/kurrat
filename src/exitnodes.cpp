@@ -8,22 +8,27 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <exception>
 #include <map>
 #include <maxminddb.h>
 #include <optional>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-std::array<std::string, 9> consensus_hosts = {
+std::vector<std::string> consensus_hosts = {
     "128.31.0.39:9231",  "217.196.147.77:80", "45.66.35.11:80",
     "131.188.40.189:80", "193.23.244.244:80", "171.25.193.9:443",
-    "199.58.81.140:80",  "204.13.164.118:80", "216.218.219.41:80"};
+    "199.58.81.140:80",  "204.13.164.118:80", "216.218.219.41:80",
+
+};
 
 size_t write_data(void *buffer, size_t size, size_t nmemb,
                   std::stringstream *userp) {
@@ -33,24 +38,33 @@ size_t write_data(void *buffer, size_t size, size_t nmemb,
   return size * nmemb;
 }
 
-int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
+int progress_callback(time_t *clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
+  if (time(NULL) - *clientp > 1 && dlnow == 0) {
+    printf("connection timed out\n");
+    return -1;
+  }
   printf("\e[1A\e[K%li bytes read\n", dlnow);
   return 0;
 }
 
-std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
-                                       std::optional<std::string> place) {
+std::optional<std::pair<std::vector<ExitInfo>, std::string>>
+grab_consensus(std::optional<MMDB_s> mmdb, std::optional<std::string> place) {
 
   std::stringstream consensus_str;
   CURLcode code;
   std::string host;
   srand(time(NULL));
 
-  do {
-    consensus_str.clear();
-    host = consensus_hosts[rand() % consensus_hosts.size()];
+  std::shuffle(consensus_hosts.begin(), consensus_hosts.end(),
+               std::default_random_engine(time(NULL)));
 
+  consensus_hosts.insert(consensus_hosts.begin(), "0.0.0.0:9030");
+
+  for (auto query_host : consensus_hosts) {
+    consensus_str.clear();
+
+    host = query_host;
     printf("reading consensus from host %s\n", host.c_str());
 
     auto handle = curl_easy_init();
@@ -62,13 +76,20 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
     curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, progress_callback);
 
+    auto time_started = time(NULL);
+    curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &time_started);
+
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &consensus_str);
 
     printf("0 bytes read\n");
     code = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
-  } while (code != CURLE_OK);
+
+    if (code == CURLE_OK) {
+      break;
+    }
+  }
 
   std::string line;
 
@@ -160,13 +181,32 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
               return a.bandwidth_size > b.bandwidth_size;
             });
 
+  return std::make_pair(exit_canidates, host);
+}
+std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
+                                       std::optional<std::string> place,
+                                       std::string host,
+                                       std::vector<ExitInfo> exit_canidates,
+                                       const size_t restart_index_c) {
+
   // ranking exit node code
   // std::map<std::string, size_t> country_popularity;
   std::stringstream exit_data_str;
 
+  size_t restart_index = restart_index_c;
+
+  if (restart_index >= exit_canidates.size()) {
+    restart_index = 0;
+  }
+
   for (auto &exit : exit_canidates) {
-    if (rand() % 10 != 0 && !place.has_value()) // dont always use the same exit
+    // if (rand() % 10 != 0 && !place.has_value()) // dont always use the same
+    // exit
+    //   continue;
+    if (restart_index > 0) {
+      restart_index--;
       continue;
+    }
 
     if (mmdb.has_value()) {
 
@@ -244,25 +284,30 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
 
     auto handle = curl_easy_init();
 
-    curl_easy_setopt(
-        handle, CURLOPT_URL,
-        ("http://" + host + "/tor/server/fp/" + std::string(identity_hex))
-            .c_str());
+    auto exit_data_url =
+        "http://" + host + "/tor/server/fp/" + std::string(identity_hex);
+    curl_easy_setopt(handle, CURLOPT_URL, exit_data_url.c_str());
+
+    printf("requesting data from %s\n", exit_data_url.c_str());
 
     curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
+
+    auto time_started = time(NULL);
     curl_easy_setopt(handle, CURLOPT_XFERINFOFUNCTION, progress_callback);
+    curl_easy_setopt(handle, CURLOPT_XFERINFODATA, &time_started);
 
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &exit_data_str);
 
     printf("0 bytes read\n");
-    code = curl_easy_perform(handle);
+    CURLcode code = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
 
     if (code != CURLE_OK) {
       continue;
     }
 
+    std::string line;
     while (std::getline(exit_data_str, line)) {
       if (line.size() < 5) {
         continue;
