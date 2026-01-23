@@ -1,6 +1,7 @@
 #include "tor.hpp"
 #include <algorithm>
 #include <arpa/inet.h>
+#include <asm-generic/socket.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -24,13 +25,12 @@ int TorConnection::create_unix_socket(char *addr, uint16_t port,
   }
 
   if (tor_connection == NULL) {
-    printf("tor connection is null");
+    fprintf(stderr, RED "[pipe] tor connection is null");
     return 0;
   }
 
   int pipefds[2];
   socketpair(AF_UNIX, SOCK_STREAM, 0, pipefds);
-  fcntl(pipefds[0], F_SETFL, O_NONBLOCK);
   int my_fd = pipefds[0];
   int return_fd = pipefds[1];
 
@@ -56,7 +56,12 @@ int TorConnection::create_unix_socket(char *addr, uint16_t port,
       tor_connection->additional_send_buffer, tor_connection->global_circuit_id,
       stream_id, std::string(addrport), 0);
 
+  fcntl(my_fd, F_SETFL, O_NONBLOCK);
+
   tor_connection->stream_map[stream_id].file_descriptor_pipe = my_fd;
+
+  printf(GRN "[pipe] stream <%i> began to %s. %zu streams open\n", stream_id,
+         addrport, tor_connection->stream_map.size());
 
   return return_fd;
 }

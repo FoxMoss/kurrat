@@ -1,5 +1,6 @@
 
 #include "exitnodes.hpp"
+#include "ansicolors.hpp"
 #include "mbedtls/base64.h"
 #include <algorithm>
 #include <array>
@@ -65,7 +66,7 @@ grab_consensus(std::optional<MMDB_s> mmdb, std::optional<std::string> place) {
     consensus_str.clear();
 
     host = query_host;
-    printf("reading consensus from host %s\n", host.c_str());
+    printf(GRN "[exit] reading consensus from host %s\n", host.c_str());
 
     auto handle = curl_easy_init();
 
@@ -82,7 +83,7 @@ grab_consensus(std::optional<MMDB_s> mmdb, std::optional<std::string> place) {
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &consensus_str);
 
-    printf("0 bytes read\n");
+    printf(COLOR_RESET "0 bytes read\n");
     code = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
 
@@ -215,7 +216,8 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
           &mmdb.value(), exit.ip.c_str(), &gai_error, &mmdb_error);
 
       if (MMDB_SUCCESS != mmdb_error || 0 != gai_error || !result.found_entry) {
-        printf("couldnt geolocate exit node %s\n", exit.ip.c_str());
+        fprintf(stderr, RED "[exit] couldnt geolocate exit node %s\n",
+                exit.ip.c_str());
         continue;
       }
 
@@ -223,7 +225,8 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
       int status = MMDB_get_value(&result.entry, &entry_data, "country",
                                   "names", "en", NULL);
       if (status != MMDB_SUCCESS || !entry_data.has_data) {
-        printf("couldnt match exit node to place %s\n", exit.ip.c_str());
+        fprintf(stderr, RED "[exit] couldnt match exit node to place %s\n",
+                exit.ip.c_str());
         continue;
       }
 
@@ -237,15 +240,7 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
       if (place.has_value() && place != place_name) {
         continue;
       }
-
-      printf("trying %s:%s from %s\n", exit.ip.c_str(), exit.port.c_str(),
-             place_name.c_str());
-
-    } else {
-
-      printf("trying %s:%s\n", exit.ip.c_str(), exit.port.c_str());
     }
-
     if (exit.idenity_key.size() != 27) {
       continue;
     }
@@ -288,7 +283,7 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
         "http://" + host + "/tor/server/fp/" + std::string(identity_hex);
     curl_easy_setopt(handle, CURLOPT_URL, exit_data_url.c_str());
 
-    printf("requesting data from %s\n", exit_data_url.c_str());
+    printf(GRN "[exit] requesting data from %s\n", exit_data_url.c_str());
 
     curl_easy_setopt(handle, CURLOPT_NOPROGRESS, 0L);
 
@@ -299,7 +294,7 @@ std::optional<ExitInfo> find_exit_node(std::optional<MMDB_s> mmdb,
     curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(handle, CURLOPT_WRITEDATA, &exit_data_str);
 
-    printf("0 bytes read\n");
+    printf(COLOR_RESET "0 bytes read\n");
     CURLcode code = curl_easy_perform(handle);
     curl_easy_cleanup(handle);
 

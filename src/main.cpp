@@ -1,3 +1,4 @@
+#include "ansicolors.hpp"
 #include "exitnodes.hpp"
 #include "keys.hpp"
 #include "mbedtls/pk.h"
@@ -99,9 +100,12 @@ static volatile bool killed_manually = false;
 
 void int_handler(int dummy) { killed_manually = true; }
 
+void pipe_handler(int dummy) {}
+
 int main(int argc, char **argv) {
 
   signal(SIGINT, int_handler);
+  signal(SIGPIPE, pipe_handler);
 
   CLI::App app{"A single hop VPN that abuses The Tor Network", "kurrat"};
 
@@ -110,6 +114,11 @@ int main(int argc, char **argv) {
   std::string key_path;
   app.add_option("key_folder", key_path, "The path of your key folder")
       ->required();
+
+  std::optional<unsigned int> socks5_port = {};
+  app.add_option("-p,--port", socks5_port,
+                 "The port the SOCKS5 sever will start on")
+      ->group("SOCKS5 OPTIONS");
 
   std::optional<std::string> maxmind_path = {};
   auto maxmind_opt =
@@ -123,61 +132,102 @@ int main(int argc, char **argv) {
       ->group("EXIT SELECTION")
       ->needs(maxmind_opt);
 
+  std::optional<std::string> exit_addr = {};
+  auto addr_opt =
+      app.add_option("--exit_addr", exit_addr, "Optional predefined exit node")
+          ->group("EXIT SELECTION");
+
+  std::optional<std::string> exit_port = {};
+  auto port_opt = app.add_option("--exit_port", exit_port,
+                                 "Optional predefined exit node port")
+                      ->group("EXIT SELECTION")
+                      ->needs(addr_opt);
+
+  std::optional<std::string> exit_identity_b64 = {};
+  auto identity_b64_opt =
+      app.add_option("--exit_identity_b64", exit_identity_b64,
+                     "Optional predefined exit node identity_b64")
+          ->group("EXIT SELECTION")
+          ->needs(addr_opt);
+
+  std::optional<std::string> exit_ntor_b64 = {};
+  auto ntor_b64_opt =
+      app.add_option("--exit_ntor_b64", exit_ntor_b64,
+                     "Optional predefined exit node ntor key encoded in base64")
+          ->group("EXIT SELECTION")
+          ->needs(addr_opt);
+
+  addr_opt->needs(port_opt)->needs(identity_b64_opt)->needs(ntor_b64_opt);
+
   CLI11_PARSE(app, argc, argv);
 
   printf(
 
-      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠀⠀⠀⠀⢰⣀⡶⠚⠳⣴⠔⠆⠸⠷⠀⠀⠀⠀⠀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠀⠀⠀⢀⠶⢭⠉⠃⣴⠆⢀⣄⠈⠃⢤⢆⠀⠀⠀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠀⠀⠀⢨⢺⡾⢀⢱⡄⠰⡀⠨⠐⠡⢒⢛⢖⠂⠀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠀⠀⢀⣌⢁⠀⢁⠠⠐⠈⡤⣀⣀⠠⠁⡽⠟⣀⡀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⣴⡀⠉⠉⢩⣁⠺⠳⠳⠀⠠⡕⠋⠃⡀⣊⣠⢦⡃⠀⠀⠀\n"
-      "⠀⠀⠀⠊⢜⡋⣠⡄⣀⣡⡀⢠⡈⠘⠁⡘⣃⣤⡀⠉⠁⡉⠀⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠑⣿⠎⠁⠁⠙⠇⠆⣁⡂⣀⣌⠛⡍⢁⠀⠀⡀⠂⠀⠀⠀\n"
-      "⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀ _                        _   \n"
-      "⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠠⠀⠀⠀⣷⠀⢶⠰⡆⠌⠁⠀⠀⠀⠀⠀| | ___   _ _ __ _ __ __ _| |_ \n"
-      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡞⠀⠀⠀⢸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀| |/ / | | | '__| '__/ _` | __|\n"
-      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀ |   <| |_| | |  | | | (_| | |_ \n"
-      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀|_|\\_\\\\__,_|_|  |_|  \\__,_|\\__|\n\n\n");
+      GRN "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠀⠀⠀⠀⢰⣀⡶⠚⠳⣴⠔⠆⠸⠷⠀⠀⠀⠀⠀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠀⠀⠀⢀⠶⢭⠉⠃⣴⠆⢀⣄⠈⠃⢤⢆⠀⠀⠀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠀⠀⠀⢨⢺⡾⢀⢱⡄⠰⡀⠨⠐⠡⢒⢛⢖⠂⠀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠀⠀⢀⣌⢁⠀⢁⠠⠐⠈⡤⣀⣀⠠⠁⡽⠟⣀⡀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⣴⡀⠉⠉⢩⣁⠺⠳⠳⠀⠠⡕⠋⠃⡀⣊⣠⢦⡃⠀⠀⠀\n"
+          "⠀⠀⠀⠊⢜⡋⣠⡄⣀⣡⡀⢠⡈⠘⠁⡘⣃⣤⡀⠉⠁⡉⠀⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠑⣿⠎⠁⠁⠙⠇⠆⣁⡂⣀⣌⠛⡍⢁⠀⠀⡀⠂⠀⠀⠀\n"
+          "⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀" HGRN " _                         _   \n" 
+          "⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠠⠀⠀⠀⣷⠀⢶⠰⡆⠌⠁⠀⠀⠀⠀⠀" HGRN "| | ___   _ _ __ _ __ __ _| |_ \n"
+          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡞⠀⠀⠀⢸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀" HGRN "| |/ / | | | '__| '__/ _` | __|\n"
+          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀ " HGRN "|   <| |_| | |  | | | (_| | |_ \n"
+          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀" HGRN "|_|\\_\\\\__,_|_|  |_|  \\__,_|\\__|" COLOR_RESET 
+          "\n\n\n");
 
-  printf("finding exit node\n");
+  printf(GRN "[main] finding exit node\n");
 
   std::optional<MMDB_s> mmdb = {};
   if (maxmind_path.has_value()) {
     mmdb = MMDB_s();
     if (MMDB_open(maxmind_path->c_str(), 0, &mmdb.value()) != 0) {
-      printf("couldnt load maxminddb file");
+      fprintf(stderr, RED "[exit] couldnt load maxminddb file");
       return {};
     }
   }
 
   auto exit_canidates = grab_consensus(mmdb, country);
   if (!exit_canidates.has_value()) {
-    printf("failed to select exit node\n");
+    fprintf(stderr, RED "[exit] failed to grab exit canidates\n");
     return 1;
   }
 
-  auto exit_node = find_exit_node(mmdb, country, exit_canidates->second,
-                                  exit_canidates->first);
+  std::optional<ExitInfo> exit_node;
 
-  if (maxmind_path.has_value()) {
-    MMDB_close(&mmdb.value());
+  if (!exit_addr.has_value()) {
+
+    exit_node = find_exit_node(mmdb, country, exit_canidates->second,
+                               exit_canidates->first);
+
+    if (maxmind_path.has_value()) {
+      MMDB_close(&mmdb.value());
+    }
+
+    if (!exit_node.has_value()) {
+      fprintf(stderr, RED "[exit] failed to select exit node\n");
+      return 1;
+    }
+  } else {
+    exit_node = ExitInfo{.idenity_key = exit_identity_b64.value(),
+                         .ip = exit_addr.value(),
+                         .port = exit_port.value(),
+                         .ntor_key = exit_ntor_b64.value()};
   }
 
-  if (!exit_node.has_value()) {
-    printf("failed to select exit node\n");
-    return 1;
-  }
+  std::thread socks_thread([socks5_port] {
+    printf(GRN "[socks] starting socks5 server on 0.0.0.0:%s\n",
+           std::to_string(socks5_port.value_or(1080)).c_str());
 
-  std::thread socks_thread(
-      [] { setup_socks(TorConnection::create_unix_socket); });
+    setup_socks(socks5_port.value_or(1080), TorConnection::create_unix_socket);
+  });
   socks_thread.detach();
 
   size_t connection_restarts = 0;
 
   while (true) {
-
     mbedtls_net_context server_ctx;
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
@@ -192,7 +242,8 @@ int main(int argc, char **argv) {
 
     auto keys_parsed = parse_keys_from_folder(key_path, &ctr_drbg);
     if (!keys_parsed.has_value()) {
-      printf("error parsing keys: %s\n", keys_parsed.error().c_str());
+      fprintf(stderr, RED "[keys] error parsing keys: %s\n",
+              keys_parsed.error().c_str());
       return -1;
     }
 
@@ -202,11 +253,19 @@ int main(int argc, char **argv) {
     std::string other_addr_str = exit_node->ip;
     std::string remote_identity_b64 = exit_node->idenity_key;
     std::string remote_ntor_b64 = exit_node->ntor_key;
+    std::string port = exit_node->port;
 
     // std::string other_addr_str = "127.0.0.1";
     // std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
     // std::string remote_ntor_b64 =
     // "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
+
+    printf(
+        GRN
+        "[exit] --exit_addr %s --exit_port %s\n       --exit_identity_b64 %s "
+        "\n       --exit_ntor_b64 %s\n",
+        other_addr_str.c_str(), port.c_str(), remote_identity_b64.c_str(),
+        remote_ntor_b64.c_str());
 
     if (no_retry_mbedtls_net_connect(&server_ctx, other_addr_str.c_str(),
                                      exit_node->port.c_str(),
@@ -249,8 +308,8 @@ int main(int argc, char **argv) {
           remote_ntor_b64, remote_identity_b64, other_addr_raw, ssl);
 
       if (!connection_opt.has_value()) {
-        printf("error creating connection: %s\n",
-               connection_opt.error().c_str());
+        fprintf(stderr, RED "[tor] error creating connection: %s\n",
+                connection_opt.error().c_str());
         return -1;
       }
 
@@ -311,7 +370,7 @@ int main(int argc, char **argv) {
     if (killed_manually) {
       return 0;
     }
-    printf("restarting connection\n");
+    fprintf(stderr, YEL "[main] restarting connection\n");
     connection_restarts++;
   }
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "ansicolors.hpp"
 #include "mbedtls/md.h"
 #include <iterator>
 #include <mutex>
@@ -256,7 +257,7 @@ public:
 
         auto certs = parse_cert(cert_buffer, cert_cursor);
         if (!certs.has_value()) {
-          printf("NON-FATAL: Certs reading failed\n");
+          printf(YEL "[tor] certs reading failed\n");
         }
         break;
       }
@@ -267,7 +268,7 @@ public:
 
         auto auth = parse_auth(auth_buffer, auth_cursor);
         if (!auth.has_value()) {
-          printf("NON-FATAL: Auth challenge reading failed\n");
+          printf(YEL "[tor] auth challenge reading failed\n");
         }
 
         break;
@@ -561,10 +562,10 @@ private:
 
   void parse_destroy(std::vector<uint8_t> &destroy_buffer, uint64_t &cursor) {
     auto destroy_reason = parse_uint8(destroy_buffer, cursor);
-    printf("destroyed with reason, %i\n", destroy_reason.value());
+    fprintf(stderr, RED "[tor] connection with exit destroyed: %i\n",
+            destroy_reason.value());
     destroyed = true;
     connected_to_exit = false;
-    printf("disconnected from exit node.\n");
   }
 
   void parse_created(std::vector<uint8_t> &created_buffer, uint64_t &cursor) {
@@ -852,7 +853,7 @@ private:
       generate_cell_variable(send_buffer, 0, 131, data);
 
       connected_to_exit = true;
-      printf("connected to exit node and ready to accept\n");
+      printf(GRN "[tor] connected to exit node and ready to accept\n");
     }
 
     auth_challenges.clear();
@@ -1006,18 +1007,18 @@ private:
     ssize_t padding_len = CELL_BODY_LEN - 11 - command_data.size();
     if (padding_len < 0) {
       // pray we dont have to handle this case
-      printf("WARN: buffer to big for relay cell\n");
+      printf(YEL "[tor] buffer to big for relay cell\n");
     }
 
     data.insert(data.end(), padding_len, 0);
 
     if (!forward_encryption_key.has_value()) {
-      printf("error: cannot crypto\n");
+      fprintf(stderr, RED "[tor] forward encryption key not set, dropping\n");
       return;
     }
 
     if (data.size() != 509) {
-      printf("dropping payload of wrong size\n");
+      fprintf(stderr, RED "[tor] dropping payload of wrong size\n");
       return;
     }
 
@@ -1053,6 +1054,7 @@ private:
 void set_global_conn(TorConnection *c_tor_connection);
 
 extern "C" {
-int setup_socks(int (*make_connection)(char *addr, uint16_t port,
+int setup_socks(unsigned int port,
+                int (*make_connection)(char *addr, uint16_t port,
                                        uint16_t stream_id));
 }

@@ -1,4 +1,5 @@
 #include "tor.hpp"
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -56,7 +57,7 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
   switch (relay_command.value()) {
   case 4: // connected. no parsing needed!
     stream_map[ntohs(stream_id.value())].connected = true;
-    printf("a stream has connected!\n");
+    printf(GRN "[tor] stream <%i> has connected\n", stream_id.value());
     break;
 
   case 5: // sendme, literally no data to parse
@@ -85,7 +86,8 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 bool TorConnection::parse_end_relay(std::vector<uint8_t> &end_buffer,
                                     uint64_t &cursor) {
   auto end_reason = parse_uint8(end_buffer, cursor);
-  printf("stream has closed with end reason %i\n", end_reason.value());
+  fprintf(stderr, YEL "[tor] stream has closed with end reason %i\n",
+          end_reason.value());
 
   return true;
 }
@@ -130,8 +132,10 @@ bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
 
   if (stream_map.contains(stream_id) &&
       stream_map[stream_id].file_descriptor_pipe.has_value()) {
-    write(stream_map[stream_id].file_descriptor_pipe.value(),
-          data_buffer.data(), data_buffer.size());
+    if (write(stream_map[stream_id].file_descriptor_pipe.value(),
+              data_buffer.data(), data_buffer.size()) == -EPIPE &&
+        stream_map[stream_id].file_descriptor_pipe.has_value())
+      close(stream_map[stream_id].file_descriptor_pipe.value());
   }
 
   my_global_recived_window++;

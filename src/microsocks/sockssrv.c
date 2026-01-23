@@ -115,7 +115,7 @@ struct thread {
    use dprintf, which writes directly to an fd. */
 #define dolog(...)                                                             \
   do {                                                                         \
-    if (!quiet)                                                                \
+    if (false)                                                                 \
       dprintf(2, __VA_ARGS__);                                                 \
   } while (0)
 #else
@@ -453,17 +453,14 @@ static void zero_arg(char *s) {
     s[i] = 0;
 }
 
-int setup_socks(int (*make_connection)(char *addr, uint16_t port,
-                                       uint16_t stream_id)) {
+int setup_socks(unsigned port, int (*make_connection)(char *addr, uint16_t port,
+                                                      uint16_t stream_id)) {
   int ch;
   const char *listenip = "0.0.0.0";
   char *p, *q;
-  unsigned port = 1080;
   signal(SIGPIPE, SIG_IGN);
   struct server s;
   sblist *threads = sblist_new(sizeof(struct thread *), 8);
-
-  printf("socks server listening on %s:%i\n", listenip, port);
 
   if (server_setup(&s, listenip, port)) {
     perror("server_setup");
