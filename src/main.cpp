@@ -163,21 +163,20 @@ int main(int argc, char **argv) {
 
   printf(
 
-      GRN "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠀⠀⠀⠀⢰⣀⡶⠚⠳⣴⠔⠆⠸⠷⠀⠀⠀⠀⠀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠀⠀⠀⢀⠶⢭⠉⠃⣴⠆⢀⣄⠈⠃⢤⢆⠀⠀⠀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠀⠀⠀⢨⢺⡾⢀⢱⡄⠰⡀⠨⠐⠡⢒⢛⢖⠂⠀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠀⠀⢀⣌⢁⠀⢁⠠⠐⠈⡤⣀⣀⠠⠁⡽⠟⣀⡀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⣴⡀⠉⠉⢩⣁⠺⠳⠳⠀⠠⡕⠋⠃⡀⣊⣠⢦⡃⠀⠀⠀\n"
-          "⠀⠀⠀⠊⢜⡋⣠⡄⣀⣡⡀⢠⡈⠘⠁⡘⣃⣤⡀⠉⠁⡉⠀⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠑⣿⠎⠁⠁⠙⠇⠆⣁⡂⣀⣌⠛⡍⢁⠀⠀⡀⠂⠀⠀⠀\n"
-          "⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀" HGRN " _                         _   \n" 
-          "⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠠⠀⠀⠀⣷⠀⢶⠰⡆⠌⠁⠀⠀⠀⠀⠀" HGRN "| | ___   _ _ __ _ __ __ _| |_ \n"
-          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡞⠀⠀⠀⢸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀" HGRN "| |/ / | | | '__| '__/ _` | __|\n"
-          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀ " HGRN "|   <| |_| | |  | | | (_| | |_ \n"
-          "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀" HGRN "|_|\\_\\\\__,_|_|  |_|  \\__,_|\\__|" COLOR_RESET 
-          "\n\n\n");
-
+      GRN
+      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠀⠀⠀⠀⢰⣀⡶⠚⠳⣴⠔⠆⠸⠷⠀⠀⠀⠀⠀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠀⠀⠀⢀⠶⢭⠉⠃⣴⠆⢀⣄⠈⠃⢤⢆⠀⠀⠀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠀⠀⠀⢨⢺⡾⢀⢱⡄⠰⡀⠨⠐⠡⢒⢛⢖⠂⠀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠀⠀⢀⣌⢁⠀⢁⠠⠐⠈⡤⣀⣀⠠⠁⡽⠟⣀⡀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⣴⡀⠉⠉⢩⣁⠺⠳⠳⠀⠠⡕⠋⠃⡀⣊⣠⢦⡃⠀⠀⠀\n"
+      "⠀⠀⠀⠊⢜⡋⣠⡄⣀⣡⡀⢠⡈⠘⠁⡘⣃⣤⡀⠉⠁⡉⠀⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠑⣿⠎⠁⠁⠙⠇⠆⣁⡂⣀⣌⠛⡍⢁⠀⠀⡀⠂⠀⠀⠀\n"
+      "⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀ _                         _   \n" 
+      "⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠠⠀⠀⠀⣷⠀⢶⠰⡆⠌⠁⠀⠀⠀⠀⠀| | ___   _ _ __ _ __ __ _| |_ \n"
+      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡞⠀⠀⠀⢸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀| |/ / | | | '__| '__/ _` | __|\n"
+      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀ |   <| |_| | |  | | | (_| | |_ \n"
+      "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀|_|\\_\\\\__,_|_|  |_|  \\__,_|\\__|\n\n\n");
   printf(GRN "[main] finding exit node\n");
 
   std::optional<MMDB_s> mmdb = {};
@@ -333,18 +332,19 @@ int main(int argc, char **argv) {
           goto end_loop;
         }
 
-        connection.step(read_buffer, send_buffer, initiator_log);
+        auto connection_send_buffer =
+            connection.step(read_buffer, initiator_log);
 
-        if (!send_buffer.empty()) {
+        if (!connection_send_buffer->empty()) {
+          mbedtls_ssl_write(&ssl, connection_send_buffer->data(),
+                            connection_send_buffer->size());
 
-          mbedtls_ssl_write(&ssl, send_buffer.data(), send_buffer.size());
-
-          send_buffer.clear();
+          connection_send_buffer->clear();
         }
 
-        unsigned char buf[256];
+        unsigned char buf[BUFFER_SIZE];
 
-        size = mbedtls_ssl_read(&ssl, buf, 256);
+        size = mbedtls_ssl_read(&ssl, buf, BUFFER_SIZE);
         if (size == 0) {
           continue;
         }

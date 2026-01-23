@@ -49,6 +49,7 @@ extern "C" {
 #include <vector>
 
 #define CELL_BODY_LEN 509
+#define BUFFER_SIZE 1024
 
 class TorConnection {
 public:
@@ -180,18 +181,17 @@ public:
   bool sent_auth = false;
   std::vector<uint8_t> responder_log;
   std::mutex during_step;
-  void step(std::vector<uint8_t> &return_buffer,
-            std::vector<uint8_t> &send_buffer,
-            std::vector<uint8_t> &initiator_log) {
+  std::vector<uint8_t> *step(std::vector<uint8_t> &return_buffer,
+                             std::vector<uint8_t> &initiator_log) {
 
     std::lock_guard<std::mutex> guard(during_step);
 
-    while (parse_cell(return_buffer, send_buffer, initiator_log)) {
+    while (parse_cell(return_buffer, additional_send_buffer, initiator_log)) {
     }
 
-    send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
-                       additional_send_buffer.end());
-    additional_send_buffer.clear();
+    // send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
+    //                    additional_send_buffer.end());
+    // additional_send_buffer.clear();
 
     for (auto stream : stream_map) {
 
@@ -199,8 +199,7 @@ public:
           my_global_sent_window <= 0 || stream.second.stream_sent_window <= 0)
         continue;
 
-      std::vector<uint8_t> data;
-      data.insert(data.end(), 256, 0);
+      std::vector<uint8_t> data(256, 0);
       int ret_size = read(stream.second.file_descriptor_pipe.value(),
                           data.data(), data.size());
 
@@ -209,8 +208,10 @@ public:
 
       data.erase(data.begin() + ret_size, data.end());
 
-      generate_data_relay(send_buffer, data, global_circuit_id, stream.first);
+      generate_data_relay(additional_send_buffer, data, global_circuit_id,
+                          stream.first);
     }
+    return &additional_send_buffer;
   }
 
   bool parse_cell(std::vector<uint8_t> &return_buffer,
