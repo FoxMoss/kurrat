@@ -50,6 +50,7 @@ extern "C" {
 
 #define CELL_BODY_LEN 509
 #define BUFFER_SIZE 1024
+#define BUFFER_READ_SIZE 497
 
 class TorConnection {
 public:
@@ -189,27 +190,21 @@ public:
     while (parse_cell(return_buffer, additional_send_buffer, initiator_log)) {
     }
 
-    // send_buffer.insert(send_buffer.end(), additional_send_buffer.begin(),
-    //                    additional_send_buffer.end());
-    // additional_send_buffer.clear();
-
     for (auto stream : stream_map) {
 
       if (!stream.second.file_descriptor_pipe.has_value() ||
           my_global_sent_window <= 0 || stream.second.stream_sent_window <= 0)
         continue;
 
-      std::vector<uint8_t> data(256, 0);
-      int ret_size = read(stream.second.file_descriptor_pipe.value(),
-                          data.data(), data.size());
+      uint8_t data[BUFFER_READ_SIZE];
+      int ret_size = read(stream.second.file_descriptor_pipe.value(), data,
+                          BUFFER_READ_SIZE);
 
       if (ret_size <= 0)
         continue;
 
-      data.erase(data.begin() + ret_size, data.end());
-
-      generate_data_relay(additional_send_buffer, data, global_circuit_id,
-                          stream.first);
+      generate_data_relay(additional_send_buffer, data, ret_size,
+                          global_circuit_id, stream.first);
     }
     return &additional_send_buffer;
   }
@@ -758,8 +753,8 @@ private:
                               std::vector<uint8_t> &send_buffer);
 
   bool generate_data_relay(std::vector<uint8_t> &send_buffer,
-                           std::vector<uint8_t> data, uint16_t circuit_id,
-                           uint16_t stream_id);
+                           const uint8_t *data, size_t data_len,
+                           uint16_t circuit_id, uint16_t stream_id);
 
   std::optional<std::vector<uint8_t>> forward_encryption_key;
   std::optional<std::vector<uint8_t>> backward_encryption_key;
@@ -983,7 +978,15 @@ private:
   void generate_relay_cell(std::vector<uint8_t> &send_buffer,
                            uint8_t relay_command, uint16_t circuit_id,
                            uint16_t stream_id,
-                           std::vector<uint8_t> command_data) {
+                           std::vector<uint8_t> &command_data) {
+    generate_relay_cell(send_buffer, relay_command, circuit_id, stream_id,
+                        command_data.data(), command_data.size());
+  }
+
+  void generate_relay_cell(std::vector<uint8_t> &send_buffer,
+                           uint8_t relay_command, uint16_t circuit_id,
+                           uint16_t stream_id, const uint8_t *command_data,
+                           size_t command_data_len) {
 
     std::vector<uint8_t> data = {};
 
@@ -997,15 +1000,15 @@ private:
     data.insert(data.end(), 4,
                 0); // digest, we need to calculate this after the cell
 
-    uint16_t length = htons(command_data.size());
+    uint16_t length = htons(command_data_len);
 
     // buffer should be smaller than CELL_BODY_LEN - 11
     data.insert(data.end(), (uint8_t *)&length,
                 (uint8_t *)&length + sizeof(uint16_t));
 
-    data.insert(data.end(), command_data.begin(), command_data.end());
+    data.insert(data.end(), command_data, command_data + command_data_len);
 
-    ssize_t padding_len = CELL_BODY_LEN - 11 - command_data.size();
+    ssize_t padding_len = CELL_BODY_LEN - 11 - command_data_len;
     if (padding_len < 0) {
       // pray we dont have to handle this case
       printf(YEL "[tor] buffer to big for relay cell\n");

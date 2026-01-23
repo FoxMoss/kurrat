@@ -155,7 +155,7 @@ bool TorConnection::parse_data_relay(std::vector<uint8_t> &data_buffer,
 }
 
 bool TorConnection::generate_data_relay(std::vector<uint8_t> &send_buffer,
-                                        std::vector<uint8_t> data,
+                                        const uint8_t *data, size_t data_len,
                                         uint16_t circuit_id,
                                         uint16_t stream_id) {
 
@@ -168,7 +168,7 @@ bool TorConnection::generate_data_relay(std::vector<uint8_t> &send_buffer,
   if (stream_map[stream_id].stream_sent_window <= 0)
     return false;
 
-  generate_relay_cell(send_buffer, 2, circuit_id, stream_id, data);
+  generate_relay_cell(send_buffer, 2, circuit_id, stream_id, data, data_len);
 
   my_global_sent_window--;
   stream_map[stream_id].stream_sent_window--;
