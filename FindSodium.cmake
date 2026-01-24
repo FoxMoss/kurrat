@@ -1,297 +1,319 @@
-# Written in 2016 by Henrik Steffen Gaßmann <henrik@gassmann.onl>
-#
-# To the extent possible under law, the author(s) have dedicated all
-# copyright and related and neighboring rights to this software to the
-# public domain worldwide. This software is distributed without any warranty.
-#
-# You should have received a copy of the CC0 Public Domain Dedication
-# along with this software. If not, see
-#
-#     http://creativecommons.org/publicdomain/zero/1.0/
-#
-########################################################################
-# Tries to find the local libsodium installation.
-#
-# On Windows the sodium_DIR environment variable is used as a default
-# hint which can be overridden by setting the corresponding cmake variable.
-#
-# Once done the following variables will be defined:
-#
-#   sodium_FOUND
-#   sodium_INCLUDE_DIR
-#   sodium_LIBRARY_DEBUG
-#   sodium_LIBRARY_RELEASE
-#
-#
-# Furthermore an imported "sodium" target is created.
-#
+set(SODIUM_MINIMAL OFF)
+option(SODIUM_ENABLE_BLOCKING_RANDOM "Enable this switch only if /dev/urandom is totally broken on the target platform" OFF)
 
-if (CMAKE_C_COMPILER_ID STREQUAL "GNU"
-    OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    set(_GCC_COMPATIBLE 1)
-endif()
-
-# static library option
-if (NOT DEFINED sodium_USE_STATIC_LIBS)
-    option(sodium_USE_STATIC_LIBS "enable to statically link against sodium" OFF)
-endif()
-if(NOT (sodium_USE_STATIC_LIBS EQUAL sodium_USE_STATIC_LIBS_LAST))
-    unset(sodium_LIBRARY CACHE)
-    unset(sodium_LIBRARY_DEBUG CACHE)
-    unset(sodium_LIBRARY_RELEASE CACHE)
-    unset(sodium_DLL_DEBUG CACHE)
-    unset(sodium_DLL_RELEASE CACHE)
-    set(sodium_USE_STATIC_LIBS_LAST ${sodium_USE_STATIC_LIBS} CACHE INTERNAL "internal change tracking variable")
-endif()
-
-
-########################################################################
-# UNIX
-if (UNIX)
-    # import pkg-config
-    find_package(PkgConfig QUIET)
-    if (PKG_CONFIG_FOUND)
-        pkg_check_modules(sodium_PKG QUIET libsodium)
-    endif()
-
-    if(sodium_USE_STATIC_LIBS)
-        foreach(_libname ${sodium_PKG_STATIC_LIBRARIES})
-            if (NOT _libname MATCHES "^lib.*\\.a$") # ignore strings already ending with .a
-                list(INSERT sodium_PKG_STATIC_LIBRARIES 0 "lib${_libname}.a")
-            endif()
-        endforeach()
-        list(REMOVE_DUPLICATES sodium_PKG_STATIC_LIBRARIES)
-
-        # if pkgconfig for libsodium doesn't provide
-        # static lib info, then override PKG_STATIC here..
-        if (NOT sodium_PKG_STATIC_FOUND)
-            set(sodium_PKG_STATIC_LIBRARIES libsodium.a)
-        endif()
-
-        set(XPREFIX sodium_PKG_STATIC)
-    else()
-        if (NOT sodium_PKG_FOUND)
-            set(sodium_PKG_LIBRARIES sodium)
-        endif()
-
-        set(XPREFIX sodium_PKG)
-    endif()
-
-    find_path(sodium_INCLUDE_DIR sodium.h
-        HINTS ${${XPREFIX}_INCLUDE_DIRS}
-    )
-    find_library(sodium_LIBRARY_DEBUG NAMES ${${XPREFIX}_LIBRARIES}
-        HINTS ${${XPREFIX}_LIBRARY_DIRS}
-    )
-    find_library(sodium_LIBRARY_RELEASE NAMES ${${XPREFIX}_LIBRARIES}
-        HINTS ${${XPREFIX}_LIBRARY_DIRS}
-    )
-
-
-########################################################################
-# Windows
-elseif (WIN32)
-    set(sodium_DIR "$ENV{sodium_DIR}" CACHE FILEPATH "sodium install directory")
-    mark_as_advanced(sodium_DIR)
-
-    find_path(sodium_INCLUDE_DIR sodium.h
-        HINTS ${sodium_DIR}
-        PATH_SUFFIXES include
-    )
-
-    if (MSVC)
-        # detect target architecture
-        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/arch.cpp" [=[
-            #if defined _M_IX86
-            #error ARCH_VALUE x86_32
-            #elif defined _M_X64
-            #error ARCH_VALUE x86_64
-            #endif
-            #error ARCH_VALUE unknown
-        ]=])
-        try_compile(_UNUSED_VAR "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/arch.cpp"
-            OUTPUT_VARIABLE _COMPILATION_LOG
-        )
-        string(REGEX REPLACE ".*ARCH_VALUE ([a-zA-Z0-9_]+).*" "\\1" _TARGET_ARCH "${_COMPILATION_LOG}")
-
-        # construct library path
-        if (_TARGET_ARCH STREQUAL "x86_32")
-            string(APPEND _PLATFORM_PATH "Win32")
-        elseif(_TARGET_ARCH STREQUAL "x86_64")
-            string(APPEND _PLATFORM_PATH "x64")
-        else()
-            message(FATAL_ERROR "the ${_TARGET_ARCH} architecture is not supported by Findsodium.cmake.")
-        endif()
-        string(APPEND _PLATFORM_PATH "/$$CONFIG$$")
-
-        if (MSVC_VERSION LESS 1900)
-            math(EXPR _VS_VERSION "${MSVC_VERSION} / 10 - 60")
-        else()
-            math(EXPR _VS_VERSION "${MSVC_VERSION} / 10 - 50")
-        endif()
-        string(APPEND _PLATFORM_PATH "/v${_VS_VERSION}")
-
-        if (sodium_USE_STATIC_LIBS)
-            string(APPEND _PLATFORM_PATH "/static")
-        else()
-            string(APPEND _PLATFORM_PATH "/dynamic")
-        endif()
-
-        string(REPLACE "$$CONFIG$$" "Debug" _DEBUG_PATH_SUFFIX "${_PLATFORM_PATH}")
-        string(REPLACE "$$CONFIG$$" "Release" _RELEASE_PATH_SUFFIX "${_PLATFORM_PATH}")
-
-        find_library(sodium_LIBRARY_DEBUG libsodium.lib
-            HINTS ${sodium_DIR}
-            PATH_SUFFIXES ${_DEBUG_PATH_SUFFIX}
-        )
-        find_library(sodium_LIBRARY_RELEASE libsodium.lib
-            HINTS ${sodium_DIR}
-            PATH_SUFFIXES ${_RELEASE_PATH_SUFFIX}
-        )
-        if (NOT sodium_USE_STATIC_LIBS)
-            set(CMAKE_FIND_LIBRARY_SUFFIXES_BCK ${CMAKE_FIND_LIBRARY_SUFFIXES})
-            set(CMAKE_FIND_LIBRARY_SUFFIXES ".dll")
-            find_library(sodium_DLL_DEBUG libsodium
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES ${_DEBUG_PATH_SUFFIX}
-            )
-            find_library(sodium_DLL_RELEASE libsodium
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES ${_RELEASE_PATH_SUFFIX}
-            )
-            set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES_BCK})
-        endif()
-
-    elseif(_GCC_COMPATIBLE)
-        if (sodium_USE_STATIC_LIBS)
-            find_library(sodium_LIBRARY_DEBUG libsodium.a
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES lib
-            )
-            find_library(sodium_LIBRARY_RELEASE libsodium.a
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES lib
-            )
-        else()
-            find_library(sodium_LIBRARY_DEBUG libsodium.dll.a
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES lib
-            )
-            find_library(sodium_LIBRARY_RELEASE libsodium.dll.a
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES lib
-            )
-
-            file(GLOB _DLL
-                LIST_DIRECTORIES false
-                RELATIVE "${sodium_DIR}/bin"
-                "${sodium_DIR}/bin/libsodium*.dll"
-            )
-            find_library(sodium_DLL_DEBUG ${_DLL} libsodium
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES bin
-            )
-            find_library(sodium_DLL_RELEASE ${_DLL} libsodium
-                HINTS ${sodium_DIR}
-                PATH_SUFFIXES bin
-            )
-        endif()
-    else()
-        message(FATAL_ERROR "this platform is not supported by FindSodium.cmake")
-    endif()
-
-
-########################################################################
-# unsupported
-else()
-    message(FATAL_ERROR "this platform is not supported by FindSodium.cmake")
-endif()
-
-
-########################################################################
-# common stuff
-
-# extract sodium version
-if (sodium_INCLUDE_DIR)
-    set(_VERSION_HEADER "${_INCLUDE_DIR}/sodium/version.h")
-    if (EXISTS _VERSION_HEADER)
-        file(READ "${_VERSION_HEADER}" _VERSION_HEADER_CONTENT)
-        string(REGEX REPLACE ".*#[ \t]*define[ \t]*SODIUM_VERSION_STRING[ \t]*\"([^\n]*)\".*" "\\1"
-            sodium_VERSION "${_VERSION_HEADER_CONTENT}")
-        set(sodium_VERSION "${sodium_VERSION}" PARENT_SCOPE)
-    endif()
-endif()
-
-# communicate results
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(
-    Sodium # The name must be either uppercase or match the filename case.
-    REQUIRED_VARS
-        sodium_LIBRARY_RELEASE
-        sodium_LIBRARY_DEBUG
-        sodium_INCLUDE_DIR
-    VERSION_VAR
-        sodium_VERSION
+add_library(sodium
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis128l/aead_aegis128l.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis128l/aegis128l_aesni.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis128l/aegis128l_armcrypto.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis128l/aegis128l_soft.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis256/aead_aegis256.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis256/aegis256_aesni.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis256/aegis256_armcrypto.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aegis256/aegis256_soft.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aes256gcm/aesni/aead_aes256gcm_aesni.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/aes256gcm/aead_aes256gcm.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/chacha20poly1305/aead_chacha20poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_aead/xchacha20poly1305/aead_xchacha20poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_auth/crypto_auth.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_auth/hmacsha256/auth_hmacsha256.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_auth/hmacsha512/auth_hmacsha512.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_auth/hmacsha512256/auth_hmacsha512256.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/crypto_box.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/crypto_box_easy.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/crypto_box_seal.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/curve25519xsalsa20poly1305/box_curve25519xsalsa20poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/ed25519_ref10.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_25_5/base.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_25_5/base2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_25_5/constants.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_25_5/fe.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_51/base.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_51/base2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_51/constants.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/ref10/fe_51/fe.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/hchacha20/core_hchacha20.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/hsalsa20/core_hsalsa20.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/hsalsa20/ref2/core_hsalsa20_ref2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/salsa/ref/core_salsa_ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/softaes/softaes.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/generichash_blake2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-avx2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-avx2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-sse41.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-sse41.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-ssse3.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-compress-ssse3.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-load-avx2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-load-sse2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-load-sse41.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/blake2b-ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/blake2b/ref/generichash_blake2b.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_generichash/crypto_generichash.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_hash/crypto_hash.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_hash/sha256/cp/hash_sha256_cp.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_hash/sha256/hash_sha256.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_hash/sha512/cp/hash_sha512_cp.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_hash/sha512/hash_sha512.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_kdf/blake2b/kdf_blake2b.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_kdf/crypto_kdf.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_kdf/hkdf/kdf_hkdf_sha256.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_kdf/hkdf/kdf_hkdf_sha512.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_kx/crypto_kx.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/crypto_onetimeauth.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/donna/poly1305_donna.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/donna/poly1305_donna.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/donna/poly1305_donna32.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/donna/poly1305_donna64.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/onetimeauth_poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/onetimeauth_poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/sse2/poly1305_sse2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_onetimeauth/poly1305/sse2/poly1305_sse2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-core.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-core.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-encoding.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-encoding.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-fill-block-avx2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-fill-block-avx512f.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-fill-block-ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2-fill-block-ssse3.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/argon2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blake2b-long.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blake2b-long.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blamka-round-avx2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blamka-round-avx512f.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blamka-round-ref.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/blamka-round-ssse3.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/pwhash_argon2i.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/argon2/pwhash_argon2id.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/crypto_pwhash.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/crypto_scalarmult.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/ref10/x25519_ref10.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/ref10/x25519_ref10.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/consts_namespace.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/curve25519_sandy2x.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/curve25519_sandy2x.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_invert.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe51_namespace.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/fe_frombytes_sandy2x.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/sandy2x/ladder_namespace.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/scalarmult_curve25519.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/curve25519/scalarmult_curve25519.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_secretbox/crypto_secretbox.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_secretbox/crypto_secretbox_easy.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_secretbox/xsalsa20poly1305/secretbox_xsalsa20poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_secretstream/xchacha20poly1305/secretstream_xchacha20poly1305.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/crypto_shorthash.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/siphash24/ref/shorthash_siphash24_ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/siphash24/ref/shorthash_siphash_ref.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/siphash24/shorthash_siphash24.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/crypto_sign.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/ref10/keypair.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/ref10/open.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/ref10/sign.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/ref10/sign_ed25519_ref10.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/sign_ed25519.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/chacha20_dolbeau-avx2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/chacha20_dolbeau-avx2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/chacha20_dolbeau-ssse3.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/chacha20_dolbeau-ssse3.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/u0.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/u1.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/u4.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/dolbeau/u8.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/ref/chacha20_ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/ref/chacha20_ref.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/stream_chacha20.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/chacha20/stream_chacha20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/crypto_stream.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/ref/salsa20_ref.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/ref/salsa20_ref.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/stream_salsa20.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/stream_salsa20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6/salsa20_xmm6.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6/salsa20_xmm6.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/salsa20_xmm6int-avx2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/salsa20_xmm6int-avx2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/salsa20_xmm6int-sse2.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/salsa20_xmm6int-sse2.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/u0.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/u1.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/u4.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa20/xmm6int/u8.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/xsalsa20/stream_xsalsa20.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/crypto_verify/verify.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/core.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_aead_aegis128l.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_aead_aegis256.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_aead_aes256gcm.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_aead_chacha20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_aead_xchacha20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_auth.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_auth_hmacsha256.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_auth_hmacsha512.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_auth_hmacsha512256.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_box.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_box_curve25519xchacha20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_box_curve25519xsalsa20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_ed25519.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_hchacha20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_hsalsa20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_ristretto255.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_salsa20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_salsa2012.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_core_salsa208.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_generichash.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_generichash_blake2b.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_hash.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_hash_sha256.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_hash_sha512.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_kdf.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_kdf_blake2b.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_kx.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_onetimeauth.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_onetimeauth_poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_pwhash.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_pwhash_argon2i.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_pwhash_argon2id.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_pwhash_scryptsalsa208sha256.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_scalarmult.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_scalarmult_curve25519.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_scalarmult_ed25519.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_scalarmult_ristretto255.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_secretbox.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_secretbox_xchacha20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_secretbox_xsalsa20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_secretstream_xchacha20poly1305.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_shorthash.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_shorthash_siphash24.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_sign.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_sign_ed25519.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_sign_edwards25519sha512batch.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_chacha20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_salsa20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_salsa2012.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_salsa208.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_xchacha20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_stream_xsalsa20.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_verify_16.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_verify_32.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/crypto_verify_64.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/export.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/chacha20_ietf_ext.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/common.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/ed25519_ref10.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/ed25519_ref10_fe_25_5.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/ed25519_ref10_fe_51.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/implementations.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/mutex.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/private/sse2_64_32.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/randombytes.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/randombytes_internal_random.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/randombytes_sysrandom.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/runtime.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/utils.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h
+    ${libsodium_SOURCE_DIR}/src/libsodium/randombytes/internal/randombytes_internal_random.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/randombytes/randombytes.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/randombytes/sysrandom/randombytes_sysrandom.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/sodium/codecs.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/sodium/core.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/sodium/runtime.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/sodium/utils.c
+    ${libsodium_SOURCE_DIR}/src/libsodium/sodium/version.c
 )
 
-if(Sodium_FOUND)
-    set(sodium_LIBRARIES
-        optimized ${sodium_LIBRARY_RELEASE} debug ${sodium_LIBRARY_DEBUG})
+if(NOT SODIUM_MINIMAL)
+    target_sources(sodium
+        PRIVATE
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/curve25519xchacha20poly1305/box_curve25519xchacha20poly1305.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_box/curve25519xchacha20poly1305/box_seal_curve25519xchacha20poly1305.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/core_ed25519.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_core/ed25519/core_ristretto255.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/crypto_scrypt-common.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/crypto_scrypt.h
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/nosse/pwhash_scryptsalsa208sha256_nosse.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/pbkdf2-sha256.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/pbkdf2-sha256.h
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/pwhash_scryptsalsa208sha256.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/scrypt_platform.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_pwhash/scryptsalsa208sha256/sse/pwhash_scryptsalsa208sha256_sse.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/ed25519/ref10/scalarmult_ed25519_ref10.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_scalarmult/ristretto255/ref10/scalarmult_ristretto255_ref10.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_secretbox/xchacha20poly1305/secretbox_xchacha20poly1305.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/siphash24/ref/shorthash_siphashx24_ref.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_shorthash/siphash24/shorthash_siphashx24.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_sign/ed25519/ref10/obsolete.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa2012/ref/stream_salsa2012_ref.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa2012/stream_salsa2012.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa208/ref/stream_salsa208_ref.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/salsa208/stream_salsa208.c
+            ${libsodium_SOURCE_DIR}/src/libsodium/crypto_stream/xchacha20/stream_xchacha20.c
+    )
 endif()
 
-# mark file paths as advanced
-mark_as_advanced(sodium_INCLUDE_DIR)
-mark_as_advanced(sodium_LIBRARY_DEBUG)
-mark_as_advanced(sodium_LIBRARY_RELEASE)
-if (WIN32)
-    mark_as_advanced(sodium_DLL_DEBUG)
-    mark_as_advanced(sodium_DLL_RELEASE)
-endif()
-
-# create imported target
-if(sodium_USE_STATIC_LIBS)
-    set(_LIB_TYPE STATIC)
-else()
-    set(_LIB_TYPE SHARED)
-endif()
-
-if(NOT TARGET sodium)
-    add_library(sodium ${_LIB_TYPE} IMPORTED)
-endif()
-
-set_target_properties(sodium PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${sodium_INCLUDE_DIR}"
-    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+set_target_properties(sodium
+    PROPERTIES
+        C_STANDARD 99
 )
 
-if (sodium_USE_STATIC_LIBS)
-    set_target_properties(sodium PROPERTIES
-        INTERFACE_COMPILE_DEFINITIONS "SODIUM_STATIC"
-        IMPORTED_LOCATION "${sodium_LIBRARY_RELEASE}"
-        IMPORTED_LOCATION_DEBUG "${sodium_LIBRARY_DEBUG}"
+target_include_directories(sodium
+    PUBLIC
+        ${libsodium_SOURCE_DIR}/src/libsodium/include
+    PRIVATE
+        ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium
+)
+
+target_compile_definitions(sodium
+    PUBLIC
+        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:SODIUM_STATIC>
+        $<$<BOOL:${SODIUM_MINIMAL}>:SODIUM_LIBRARY_MINIMAL>
+    PRIVATE
+        CONFIGURED
+        $<$<BOOL:${BUILD_SHARED_LIBS}>:SODIUM_DLL_EXPORT>
+        $<$<BOOL:${SODIUM_ENABLE_BLOCKING_RANDOM}>:USE_BLOCKING_RANDOM>
+        $<$<BOOL:${SODIUM_MINIMAL}>:MINIMAL>
+        $<$<C_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>
+)
+
+# No generator expression for CMAKE_C_COMPILER_FRONTEND_VARIANT until CMake 3.30:
+# https://gitlab.kitware.com/cmake/cmake/-/merge_requests/9538
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_definitions(sodium
+        PRIVATE
+            _CRT_SECURE_NO_WARNINGS
     )
-else()
-    if (UNIX)
-        set_target_properties(sodium PROPERTIES
-            IMPORTED_LOCATION "${sodium_LIBRARY_RELEASE}"
-            IMPORTED_LOCATION_DEBUG "${sodium_LIBRARY_DEBUG}"
-        )
-    elseif (WIN32)
-        set_target_properties(sodium PROPERTIES
-            IMPORTED_IMPLIB "${sodium_LIBRARY_RELEASE}"
-            IMPORTED_IMPLIB_DEBUG "${sodium_LIBRARY_DEBUG}"
-        )
-        if (NOT (sodium_DLL_DEBUG MATCHES ".*-NOTFOUND"))
-            set_target_properties(sodium PROPERTIES
-                IMPORTED_LOCATION_DEBUG "${sodium_DLL_DEBUG}"
-            )
-        endif()
-        if (NOT (sodium_DLL_RELEASE MATCHES ".*-NOTFOUND"))
-            set_target_properties(sodium PROPERTIES
-                IMPORTED_LOCATION_RELWITHDEBINFO "${sodium_DLL_RELEASE}"
-                IMPORTED_LOCATION_MINSIZEREL "${sodium_DLL_RELEASE}"
-                IMPORTED_LOCATION_RELEASE "${sodium_DLL_RELEASE}"
-            )
-        endif()
-    endif()
+
+    # Special manual feature-handling for clang-cl.
+    target_compile_options(sodium
+        PUBLIC
+            # blake2b-compress-avx2
+            -mavx2
+        PRIVATE
+            # aead_aes256gcm_aesni
+            -maes
+            -mpclmul
+            -mssse3
+    )
 endif()
+
+# Variables that need to be exported to version.h.in
+set(VERSION 1.0.20)
+set(SODIUM_LIBRARY_VERSION_MAJOR 26)
+set(SODIUM_LIBRARY_VERSION_MINOR 2)
+if(SODIUM_MINIMAL)
+    set(SODIUM_LIBRARY_MINIMAL_DEF "#define SODIUM_LIBRARY_MINIMAL 1")
+endif()
+
+configure_file(
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h.in
+    ${libsodium_SOURCE_DIR}/src/libsodium/include/sodium/version.h
+)
+

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0)
+cmake_minimum_required(VERSION ${CMAKE_VERSION})
 set(CMAKE_CXX_STANDARD 20)
 
 project(Kurrat)
@@ -6,13 +6,30 @@ project(Kurrat)
 # set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
 # set(CMAKE_C_FLAGS_DEBUG  "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
 
+option(KURRAT_BUILD_STATIC "Will the binary be built as a self contained static executable" OFF)
+
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+
+if(KURRAT_BUILD_STATIC)
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -static-libgcc")
+  set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -static -static-libgcc -static-libstdc++")
+  set(CURL_USE_MBEDTLS ON CACHE BOOL "" FORCE)
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+  set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+  set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+  set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+  set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+
+endif()
+
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # libraries
-include(FindSodium.cmake)
 
 set(ENABLE_TESTING OFF)
 include(FetchContent)
@@ -24,6 +41,13 @@ FetchContent_Declare(
     GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(mbedtls)
+
+set(MBEDTLS_INCLUDE_DIR ${mbedtls_SOURCE_DIR}/include)
+set(MBEDTLS_LIBRARY mbedtls)
+set(MBEDX509_LIBRARY mbedx509)
+set(MBEDCRYPTO_LIBRARY mbedcrypto)
+set(MBEDTLS_INCLUDE_DIRS ${MBEDTLS_INCLUDE_DIR})
+set(MBEDTLS_LIBRARIES ${MBEDTLS_LIBRARY} ${MBEDX509_LIBRARY} ${MBEDCRYPTO_LIBRARY})
 
 include(FetchContent)
 FetchContent_Declare(
@@ -45,17 +69,12 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(expected)
 
-find_package(CURL REQUIRED)
-
-if(NOT CURL_FOUND)
-  FetchContent_Declare(
-    CURL 
-    GIT_REPOSITORY https://github.com/curl/curl.git
-    GIT_PROGRESS TRUE
-    GIT_SHALLOW TURE
-  )
-  FetchContent_MakeAvailable(CURL)
-endif()
+set(CURL_USE_LIBPSL OFF)
+FetchContent_Declare(
+  CURL 
+  URL https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.xz
+)
+FetchContent_MakeAvailable(CURL)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -66,6 +85,18 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(maxminddb)
+
+include(FetchContent)
+FetchContent_Declare(
+    libsodium 
+    GIT_REPOSITORY https://github.com/jedisct1/libsodium
+    GIT_TAG 1.0.20-RELEASE
+    GIT_PROGRESS TRUE
+)
+
+FetchContent_MakeAvailable(libsodium)
+
+include(FindSodium.cmake)
 
 add_subdirectory(src)
 add_subdirectory(keygrubber)
