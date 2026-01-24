@@ -1,0 +1,29 @@
+name: Build Static
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - uses: jirutka/setup-alpine@v1
+        with:
+          branch: v3.22
+
+      - run: |
+          cat /etc/alpine-release
+          apk add cmake make build-base git python3 clang18
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DKURRAT_BUILD_STATIC=ON -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18
+          make -j$(nproc)
+        shell: alpine.sh --root {0}
+        
+      - name: Archive static build
+        uses: actions/upload-artifact@v4
+        with:
+          name: kurrat-static
+          path: build/src/kurrat

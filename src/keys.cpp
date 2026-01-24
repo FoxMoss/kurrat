@@ -1,5 +1,6 @@
 #include "mbedtls/rsa.h"
 #include <filesystem>
+#include <format>
 #include <thread>
 extern "C" {
 #include "donna/ed25519_donna_tor.h"
@@ -16,7 +17,6 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <linux/tls.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>

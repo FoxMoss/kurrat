@@ -11,27 +11,32 @@ option(KURRAT_BUILD_STATIC "Will the binary be built as a self contained static 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
 
+
 if(KURRAT_BUILD_STATIC)
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -static -static-libgcc")
   set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -static -static-libgcc -static-libstdc++")
-  set(CURL_USE_MBEDTLS ON CACHE BOOL "" FORCE)
-  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
-  set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
-  set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
-  set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
-  set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
   set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
-  set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+  set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+else()
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 
+  set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+  set(BUILD_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 endif()
 
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# libraries
 
-set(ENABLE_TESTING OFF)
+set(CMAKE_INSTALL_RPATH "/usr/local/lib")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+
+# libraries
+set(ENABLE_TESTING CACHE INTERNAL OFF)
+set(ENABLE_PROGRAMS CACHE INTERNAL OFF)
+
 include(FetchContent)
 FetchContent_Declare(
     mbedtls 
@@ -69,14 +74,28 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(expected)
 
-set(CURL_USE_LIBPSL OFF)
-FetchContent_Declare(
-  CURL 
-  URL https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.xz
-)
-FetchContent_MakeAvailable(CURL)
+set(CURL_USE_MBEDTLS ON CACHE BOOL "" FORCE)
+set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
 
-include(FetchContent)
+
+find_package(CURL)
+set(LIBCURL_TARGET curl)
+if(NOT CURL_FOUND)
+  FetchContent_Declare(
+    CURL 
+    URL https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.xz
+  )
+  FetchContent_MakeAvailable(CURL)
+  set(LIBCURL_TARGET libcurl)
+endif()
+
 FetchContent_Declare(
     maxminddb 
     GIT_REPOSITORY https://github.com/maxmind/libmaxminddb

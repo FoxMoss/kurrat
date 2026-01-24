@@ -16,7 +16,6 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <linux/tls.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>

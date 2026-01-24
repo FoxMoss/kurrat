@@ -24,7 +24,6 @@ extern "C" {
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
-#include <linux/tls.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
@@ -35,7 +34,6 @@ extern "C" {
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <optional>
-#include <print>
 #include <sodium.h>
 #include <sodium/crypto_sign.h>
 #include <stdio.h>

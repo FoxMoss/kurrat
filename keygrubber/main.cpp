@@ -3,13 +3,10 @@
 
 #include "mbedtls/base64.h"
 #include "mbedtls/pk.h"
-#include "mbedtls/rsa.h"
-#include "mbedtls/x509.h"
 
 #include <arpa/inet.h>
 #include <cstddef>
 #include <cstdint>
-#include <linux/tls.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>
@@ -30,7 +27,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <utility>
 #include <vector>
 
 int main() {

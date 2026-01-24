@@ -1,7 +1,6 @@
 #include "tor.hpp"
 #include <algorithm>
 #include <arpa/inet.h>
-#include <asm-generic/socket.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>

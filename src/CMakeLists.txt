@@ -12,7 +12,7 @@ add_executable(kurrat
  microsocks/sblist_delete.c
 )
 
-target_link_libraries(kurrat PRIVATE mbedtls sodium expected CLI11::CLI11 libcurl maxminddb)
+target_link_libraries(kurrat PRIVATE mbedtls sodium expected CLI11::CLI11 ${LIBCURL_TARGET} maxminddb)
 
 add_custom_command(TARGET kurrat POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy

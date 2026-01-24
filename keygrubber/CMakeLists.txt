@@ -9,5 +9,3 @@ add_custom_command(TARGET keygrubber POST_BUILD
         ${CMAKE_BINARY_DIR}/compile_commands.json
         ${CMAKE_SOURCE_DIR}/compile_commands.json
     COMMENT "Add clangd to the base directory")
-
-install(TARGETS keygrubber DESTINATION bin)

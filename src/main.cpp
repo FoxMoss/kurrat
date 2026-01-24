@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <ctime>
 #include <fcntl.h>
-#include <linux/tls.h>
 #include <maxminddb.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
@@ -26,7 +25,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
-#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <thread>
@@ -88,7 +86,7 @@ int no_retry_mbedtls_net_connect(mbedtls_net_context *ctx, const char *host,
 ⠀⠀⠀⠀⣴⡀⠉⠉⢩⣁⠺⠳⠳⠀⠠⡕⠋⠃⡀⣊⣠⢦⡃⠀⠀⠀
 ⠀⠀⠀⠊⢜⡋⣠⡄⣀⣡⡀⢠⡈⠘⠁⡘⣃⣤⡀⠉⠁⡉⠀⠀⠀⠀
 ⠀⠀⠀⠀⠑⣿⠎⠁⠁⠙⠇⠆⣁⡂⣀⣌⠛⡍⢁⠀⠀⡀⠂⠀⠀⠀
-⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀ _                        _   
+⠀⠀⠀⠀⠀⠉⠰⣦⣤⠄⠀⠈⠈⢸⡆⠁⠁⢔⠊⠡⠐⠃⠀⠀⠀⠀ _                         _   
 ⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀⠠⠀⠀⠀⣷⠀⢶⠰⡆⠌⠁⠀⠀⠀⠀⠀| | ___   _ _ __ _ __ __ _| |_ 
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡞⠀⠀⠀⢸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀| |/ / | | | '__| '__/ _` | __|
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣷⠀⠀⠀⠀⠀⠀⠀⠀⠀ |   <| |_| | |  | | | (_| | |_ 
@@ -373,4 +371,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, YEL "[main] restarting connection\n");
     connection_restarts++;
   }
+
+  printf(COLOR_RESET);
 }

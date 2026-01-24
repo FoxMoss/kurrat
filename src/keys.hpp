@@ -1,23 +1,10 @@
 #pragma once
 
-#include <filesystem>
-#include <thread>
-extern "C" {
-#include "donna/ed25519_donna_tor.h"
-}
-#include "mbedtls/md.h"
 #include "mbedtls/pk.h"
-#include "mbedtls/sha256.h"
-#include "mbedtls/x509.h"
-#include "mbedtls/x509_crt.h"
 #include "tor.hpp"
 #include <arpa/inet.h>
-#include <chrono>
-#include <cstddef>
 #include <cstdint>
-#include <ctime>
-#include <expected>
-#include <linux/tls.h>
+#include <filesystem>
 #include <mbedtls/aes.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>
@@ -28,9 +15,7 @@ extern "C" {
 #include <mbedtls/ssl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <string>
 #include <sys/socket.h>
 #include <sys/types.h>
