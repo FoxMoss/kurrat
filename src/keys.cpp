@@ -352,53 +352,59 @@ create_link_cert(const std::vector<uint8_t> &signing_secret_key) {
 
 tl::expected<KeysParsed, std::string>
 parse_keys_from_folder(std::filesystem::path folder_path, void *ctr_drbg) {
-  KeysParsed parsed;
+  try {
 
-  if (!std::filesystem::exists(folder_path))
-    return tl::unexpected("failed to find key folder");
+    KeysParsed parsed;
 
-  auto secret_id_key_path = folder_path / "secret_id_key";
+    if (!std::filesystem::exists(folder_path))
+      return tl::unexpected("failed to find key folder");
 
-  if (!std::filesystem::exists(secret_id_key_path))
-    return tl::unexpected("failed to find secret_id_key");
+    auto secret_id_key_path = folder_path / "secret_id_key";
 
-  auto secret_id_key_parsed =
-      read_rsa_secret_key(secret_id_key_path.c_str(), ctr_drbg);
-  UNWRAP(secret_id_key_parsed)
-  parsed.secret_id_key = secret_id_key_parsed.value();
+    if (!std::filesystem::exists(secret_id_key_path))
+      return tl::unexpected("failed to find secret_id_key");
 
-  auto master_id_secret_key_raw_path =
-      folder_path / "ed25519_master_id_secret_key";
+    auto secret_id_key_parsed =
+        read_rsa_secret_key(secret_id_key_path.c_str(), ctr_drbg);
+    UNWRAP(secret_id_key_parsed)
+    parsed.secret_id_key = secret_id_key_parsed.value();
 
-  if (!std::filesystem::exists(master_id_secret_key_raw_path))
-    return tl::unexpected("failed to find ed25519_master_id_secret_key");
+    auto master_id_secret_key_raw_path =
+        folder_path / "ed25519_master_id_secret_key";
 
-  auto master_id_secret_key_raw_parsed =
-      read_ed25519_signing_key(master_id_secret_key_raw_path.c_str());
-  UNWRAP(master_id_secret_key_raw_parsed)
+    if (!std::filesystem::exists(master_id_secret_key_raw_path))
+      return tl::unexpected("failed to find ed25519_master_id_secret_key");
 
-  parsed.master_id_secret_key_raw = master_id_secret_key_raw_parsed.value();
+    auto master_id_secret_key_raw_parsed =
+        read_ed25519_signing_key(master_id_secret_key_raw_path.c_str());
+    UNWRAP(master_id_secret_key_raw_parsed)
 
-  auto signing_secret_key_path = folder_path / "ed25519_signing_secret_key";
+    parsed.master_id_secret_key_raw = master_id_secret_key_raw_parsed.value();
 
-  if (!std::filesystem::exists(signing_secret_key_path))
-    return tl::unexpected("failed to find ed25519_signing_secret_key");
+    auto signing_secret_key_path = folder_path / "ed25519_signing_secret_key";
 
-  auto signing_secret_key_parsed =
-      read_ed25519_signing_key(signing_secret_key_path.c_str());
-  UNWRAP(signing_secret_key_parsed)
+    if (!std::filesystem::exists(signing_secret_key_path))
+      return tl::unexpected("failed to find ed25519_signing_secret_key");
 
-  parsed.signing_secret_key = signing_secret_key_parsed.value();
+    auto signing_secret_key_parsed =
+        read_ed25519_signing_key(signing_secret_key_path.c_str());
+    UNWRAP(signing_secret_key_parsed)
 
-  auto ntor_key_path = folder_path / "secret_onion_key_ntor";
+    parsed.signing_secret_key = signing_secret_key_parsed.value();
 
-  if (!std::filesystem::exists(ntor_key_path))
-    return tl::unexpected("failed to find secret_onion_key_ntor");
+    auto ntor_key_path = folder_path / "secret_onion_key_ntor";
 
-  auto ntor_key_parsed = read_ed25519_signing_key(ntor_key_path.c_str());
-  UNWRAP(ntor_key_parsed)
+    if (!std::filesystem::exists(ntor_key_path))
+      return tl::unexpected("failed to find secret_onion_key_ntor");
 
-  parsed.ntor_key = ntor_key_parsed.value();
+    auto ntor_key_parsed = read_ed25519_signing_key(ntor_key_path.c_str());
+    UNWRAP(ntor_key_parsed)
 
-  return parsed;
+    parsed.ntor_key = ntor_key_parsed.value();
+
+    return parsed;
+  } catch (std::exception &e) {
+    return tl::unexpected(e.what());
+  }
+  return tl::unexpected("failed to try catch or return error value");
 }

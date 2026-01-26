@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 
   CLI::App app{"A single hop VPN that abuses The Tor Network", "kurrat"};
 
-  app.set_version_flag("-v,--version", "v0.0.2");
+  app.set_version_flag("-v,--version", "v0.0.3");
 
   std::string key_path;
   app.add_option("key_folder", key_path, "The path of your key folder")

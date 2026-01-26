@@ -281,6 +281,8 @@ public:
 
         if (!sent_auth) {
           generate_cert_cell(send_buffer);
+
+          // authenticate cell needs up to date info about our stream
           initiator_log.insert(initiator_log.end(), send_buffer.begin(),
                                send_buffer.end());
 
@@ -288,7 +290,6 @@ public:
           generate_netinfo_cell(send_buffer);
 
           generate_create2_cell(send_buffer, global_circuit_id);
-          // generate_create2_cell(send_buffer, 0x8001);
         }
 
         break;
@@ -745,7 +746,8 @@ private:
   bool parse_relay(std::vector<uint8_t> &relay_buffer, uint16_t circuit_id,
                    uint64_t &cursor, std::vector<uint8_t> &send_buffer);
 
-  bool parse_end_relay(std::vector<uint8_t> &end_buffer, uint64_t &cursor);
+  bool parse_end_relay(std::vector<uint8_t> &end_buffer, uint64_t &cursor,
+                       uint16_t stream_id);
 
   bool parse_data_relay(std::vector<uint8_t> &end_buffer, uint16_t circuit_id,
                         uint16_t stream_id, std::vector<uint8_t> &send_buffer);

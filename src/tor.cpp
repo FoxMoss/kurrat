@@ -73,7 +73,8 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
       close(stream_map[ntohs(stream_id.value())].file_descriptor_pipe.value());
 
     stream_map.erase(ntohs(stream_id.value()));
-    return parse_end_relay(relay_payload.value(), relay_payload_cursor);
+    return parse_end_relay(relay_payload.value(), relay_payload_cursor,
+                           ntohs(stream_id.value()));
     break;
   case 2:
     return parse_data_relay(relay_payload.value(), circuit_id,
@@ -84,10 +85,10 @@ bool TorConnection::parse_relay(std::vector<uint8_t> &relay_buffer,
 }
 
 bool TorConnection::parse_end_relay(std::vector<uint8_t> &end_buffer,
-                                    uint64_t &cursor) {
+                                    uint64_t &cursor, uint16_t stream_id) {
   auto end_reason = parse_uint8(end_buffer, cursor);
-  fprintf(stderr, YEL "[tor] stream has closed with end reason %i\n",
-          end_reason.value());
+  fprintf(stderr, YEL "[tor] stream <%i> has closed with end reason %i\n",
+          stream_id, end_reason.value());
 
   return true;
 }

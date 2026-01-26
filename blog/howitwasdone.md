@@ -1,4 +1,7 @@
-# Reimplementing Tor to use it as a single-hop proxy.
+# Reimplementing Tor from scratch to use it as a single-hop proxy.
+
+> All of the code in this blog post is full open source at
+> [github.com/FoxMoss/kurrat/](https://github.com/FoxMoss/kurrat/)
 
 Tor is mostly used by feds, drug buyers/sellers, and journalists. I am none of these things. I am a
 highschooler who needs a fast VPN and doesn't want to fork over money to a provider. I need this for
@@ -87,7 +90,7 @@ Then there should be nothing stopping me if we do this:
 you (relay) -> exit
 ```
 
-Now fully nerd sniped I began my hand reimplementation of Tor. 
+Now fully nerd sniped I began my hand reimplementation of Tor.
 
 ## The Implementation
 
@@ -111,6 +114,8 @@ To make this work I either handle dependencies my self with custom CMake build s
 CMake scripts via [CMake
 FetchContent](https://cmake.org/cmake/help/latest/module/FetchContent.html).But generally here the
 less libraries we use the better as it cuts down build time.
+
+## Cryptography and then some more cryptography
 
 To initiate a connection with an exit node you have a couple of handshakes to do.
 
@@ -165,8 +170,7 @@ A Tor relay's keys folder looks like this:
 ```
 
 Tor has two key exchange systems, Ed25519 which is the newer system and RSA which despite being
-deprecated everything still seems to require. Why was RSA deprecated? I have no idea and couldn't
-scrounge up much information.
+deprecated everything still seems to require. 
 
 These are both public key signature systems, where there's a private key and a public key. The
 public key can be used to verify a message came from a specific private key. So as long as you get
@@ -208,3 +212,246 @@ private key, both sides can generate a shared secret key with an [HMAC
 algorithm](https://en.wikipedia.org/wiki/HMAC).
 
 From there we're done and can send encrypted relay packets to and fro.
+
+So in sequence all of this looks is quite simple:
+```c++
+    generate_cert_cell(send_buffer);
+
+    // authenticate cell needs up to date info about our stream
+    initiator_log.insert(initiator_log.end(), send_buffer.begin(),
+                       send_buffer.end()); 
+
+    generate_authenticate_cell(send_buffer, initiator_log);
+
+    // arbitrary netinfo packet i skipped over because it has no bearing on the connection
+    generate_netinfo_cell(send_buffer);
+
+    // our key exchange
+    generate_create2_cell(send_buffer, global_circuit_id);
+```
+
+## Starting up a Tor node
+
+So we have a working implementation, how do we get they keys? Starting a Tor node is relatively easy
+if you have a VPS. Install Tor, configure files. Thankfully the hosting provider I chose BuyVM
+happens to be borderline bulletproof, and [has no qualms with hosting extremist
+content.](https://web.archive.org/web/20190707150046/https://www.newyorker.com/tech/annals-of-technology/the-neo-nazis-of-the-daily-stormer-wander-the-digital-wilderness).
+I've been a happy customer for a while for hosting tiny networking projects and personal website at
+good prices, and I was pretty blissfully unaware of this fact when I bought the service. Luckily
+this comes in handy:
+
+> Frantech is a strong believer and supporter of Freedom of Speech and has taken a strong, and in
+> some cases very public, stance against censorship. You're welcome to run Exit, Relay, and Bridge
+> nodes, just follow the rules when doing so.
+>
+> -- *[BuyVM Acceptable Use Policy](https://buyvm.net/acceptable-use-policy/)*
+
+Great for us! Not so sure about that other content, but lets carry on.
+
+After waiting 0-3 days [(according to this blog)
+](https://blog.torproject.org/lifecycle-of-a-new-relay/), your relay node gets automatically added
+to the Tor consensus.
+
+What exactly is the Tor consensus? In a centralized system you just have one guy, one computer
+telling everyone who's in the network. That would be nice until you find out that that one guy is a
+fed. Now that one guy is telling everyone that the only nodes that exist are fed nodes. Now when you
+connect through a normal circuit to whistle blow to the news or something the feds know whats up.
+Because your guard node is in cahoots with your middle and exit node so can gain information both
+about what websites you're accessing and who you are. This is fine for our use case because we don't
+care about security, but awful for everyone else.
+
+As such tor has 9 nodes which maintain the consensus. Each get votes to make changes about the Tor
+network, and all of them must agree to add or remove nodes. So then we hope every consensus node
+isn't a fed, or if they are they all feds from different countries all unwilling to work together.
+
+## We're on first
+
+We've got all of our bases covered. We have the code and the keys, does it work? 
+
+Surprisingly, it does. I was expecting some additional barrier I hadn't thought of, but uh no. It just
+works. So lets benchmark it.
+
+Checking fast.com with just random Tor nodes from either program, you get pretty comparable speeds.
+| Connection         | Download Speed |
+| -------------      | -------------- |
+| Kurrat             | 20 Mbps        |
+| Tor Browser        | 12 Mbps        |
+| Home Internet      | 81 Mbps        |
+| My Phone's Hotspot | 3 Mbps         |
+
+Of course this is a pretty rough comparison, totally changes based on node selection &c, but we
+beat the most important metric: it's faster then my hotspot. I've been daily driving this for a
+while now and I'm quite please with my work.
+
+That about wraps what's interesting for this project, the code was pretty straight forward
+networking affair, the cryptography was what was hard to get right.
+
+If you're interested in finishing the rest of the protocol for your own learning purposes, the code
+is very readable with proper errors as values. 
+
+So contributions, and install instruction are up:
+[![kurrat logo](logo.png)
+Github Link
+](https://github.com/FoxMoss/kurrat)
+
+## A footnote on style
+
+C++ is a language that evolves with time, so if you're just learning it or coming back to it I have
+some options.
+
+Avoid try catch at all costs. We can have errors as values in our code. If we're going pure C++20
+all we get is `std::optional` which is alright. Where try catch is opaque and you have to just pray
+that a function can't fail `std::optional` is explicit, you have to purposefully ignore it to write
+code with error values.
+
+```c++
+std::optional<std::pair<std::vector<ExitInfo>, std::string>> grab_consensus() {
+    // curl networking that could fail!
+
+    if(response_code != CURL_OK) {
+        return {}; // no value
+    }
+    
+    // parse and return values
+    return exit_node_information;
+}
+
+void main() {
+    auto exit_node_information = grab_consensus()
+    if(!exit_node_information.has_value()) {
+        // print out the error and handle properly
+        return 1;
+    }
+}
+```
+
+`std::expected` is the bonus version of this where you can pass back errors instead of "it didn't
+work, deal with it." Sadly std::expected is C++23 only, which is not widely available enough for me
+to consider writing code in it. I use a polyfill
+[tl::expected](https://github.com/TartanLlama/expected) which is great!
+
+```c++
+#define ASSERT_ZERO(val, err)                                                  \
+  {                                                                            \
+    int ret = val;                                                             \
+    if (ret != 0)                                                              \
+      return tl::unexpected(err + std::string("(error code ") +                \
+                            std::to_string(ret) + std::string(")"));           \
+  }
+
+#define ASSERT(val, eql, err)                                                  \
+  if (val != eql) {                                                            \
+    return tl::unexpected(err);                                                \
+  }
+
+#define ASSERT_NOT(val, eql, err)                                              \
+  if (val == eql) {                                                            \
+    return tl::unexpected(err);                                                \
+  }
+
+#define ASSERT_NON_NULL(val, err)                                              \
+  if (val == NULL) {                                                           \
+    return tl::unexpected(err);                                                \
+  }
+
+tl::expected<std::vector<uint8_t>, std::string>
+read_ed25519_secret_key(char *ed25519_secret_key_path) {
+  FILE *master_id_secret_key = fopen(ed25519_secret_key_path, "rb");
+
+  ASSERT_NON_NULL(master_id_secret_key, "faild to read ed25519 id key")
+
+  ASSERT_ZERO(fseek(master_id_secret_key, 0x20, SEEK_SET),
+              "failed to seek id secret key");
+
+  std::vector<uint8_t> master_id_secret_key_raw;
+  master_id_secret_key_raw.insert(master_id_secret_key_raw.end(), 64, 0);
+  ASSERT(fread(master_id_secret_key_raw.data(), 1, 64, master_id_secret_key),
+         64, "failed to read id secret key");
+  fclose(master_id_secret_key);
+
+  return master_id_secret_key_raw;
+}
+```
+
+One of the biggest wins I found was having the foresight to modularize basically everything. This is
+an aggressively portable function. No large copies later on, just mutating input variables.
+
+```c++
+  void generate_cell_fixed(std::vector<uint8_t> &return_buffer,
+                           uint16_t circuit_id, uint8_t command,
+                           std::vector<uint8_t> &data) {
+
+    uint16_t circuit_id_converted = htons(circuit_id);
+    return_buffer.insert(return_buffer.end(), (uint8_t *)&circuit_id_converted,
+                         (uint8_t *)&circuit_id_converted + sizeof(uint16_t));
+    return_buffer.push_back(command);
+
+    uint16_t padding = CELL_BODY_LEN - data.size();
+    return_buffer.insert(return_buffer.end(), data.begin(), data.end());
+    return_buffer.insert(return_buffer.end(), padding, 0);
+  }
+```
+
+Same with parsing variables from a cell. Everything just mutates a cursor from a buffer and there's
+no need to think about offsets.
+
+```c++
+  std::optional<bool> parse_cert(std::vector<uint8_t> &cert_buffer,
+                                 uint64_t &cursor) {
+    auto count = parse_uint8(cert_buffer, cursor);
+    if (!count.has_value())
+        return {};
+
+    for (uint64_t i = 0; i < count; i++) {
+        auto cert_type = parse_uint8(cert_buffer, cursor);
+        if (!cert_type.has_value())
+        return {};
+
+        auto cert_len = parse_uint16(cert_buffer, cursor);
+        if (!cert_len.has_value())
+        return {};
+
+        auto cert =
+          parse_fixed_buffer(cert_buffer, cursor, ntohs(cert_len.value()));
+        if (!cert.has_value())
+        return {};
+
+        remote_certs.push_back({cert_type.value(), cert.value()});
+
+        // handle cert
+
+    }
+
+    return true;
+  }
+```
+
+This was probably obvious to everyone who's written a networking client before me but no one told me
+that before I wrote my last packet parsers.
+
+```c++
+// code i wrote two years ago at https://github.com/MercuryWorkshop/Woeful/blob/main/src/packets.h
+    InfoPacket(unsigned char *src, size_t src_length) {
+
+        // this should be src[0]
+        major_wisp_version = *(uint8_t *)(src);
+        // this should be src[1]
+        minor_wisp_version = *(uint8_t *)(src + sizeof(uint8_t));
+
+        size_t header_size = sizeof(uint8_t) + sizeof(uint8_t);
+        unsigned char *data_ptr = src + header_size;
+
+        extension_data_len = src_length - header_size;
+
+        // a vector would be much better suited here with little performance cost
+        // the standard library probably knows better then we do
+        extension_data =
+            std::make_unique_for_overwrite<unsigned char[]>(extension_data_len);
+
+        memcpy(extension_data.get(), data_ptr, extension_data_len);
+    }
+```
+
+## Credits
+
+If you proof read this blog tell me how I should credit you. (ie, name, external links whatever)

@@ -41,7 +41,7 @@ size_t write_data(void *buffer, size_t size, size_t nmemb,
 
 int progress_callback(time_t *clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
-  if (time(NULL) - *clientp > 1 && dlnow == 0) {
+  if (time(NULL) - *clientp > 30 && dlnow == 0) {
     printf("connection timed out\n");
     return -1;
   }

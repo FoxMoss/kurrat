@@ -1,6 +1,6 @@
 # ![the kurrat logo](logo.png)
 
-A single hop VPN by abusing The Tor Network.
+A single hop VPN by using The Tor Network.
 
 > [!WARNING]  
 > This program makes a concious choice to ignore the security that Tor provides. Any and all
@@ -56,8 +56,8 @@ If you do not curently run a Tor relay node you have two options:
 
 ## Install
 
-Grab the latest kurrat-musl build from [the releases tab](https://github.com/FoxMoss/kurrat/releases).
-Mark as an executable, and run from your CLI.
+Grab the latest kurrat-static.zip build from [the releases tab](https://github.com/FoxMoss/kurrat/releases).
+Then unzip, mark as executable, and run in your favorite terminal!
 
 Not on any package managers at the current moment.
 
