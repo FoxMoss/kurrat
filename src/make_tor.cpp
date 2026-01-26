@@ -99,11 +99,7 @@ make_tor_connection(mbedtls_pk_context secret_id_key,
   // IDENTITY_V_SIGNING
   auto id_cert = create_id_cert(master_id_secret_key_raw, signing_secret_key);
   UNWRAP(id_cert)
-
-  // SIGNING_V_TLS_CERT
-  auto tls_cert = create_tls_cert(signing_secret_key, responder_cert_hash);
-  UNWRAP(tls_cert)
-
+  //
   // SIGNING_V_LINK_AUTH
   auto link_cert = create_link_cert(signing_secret_key);
   UNWRAP(link_cert)

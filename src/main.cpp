@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 
   CLI::App app{"A single hop VPN that abuses The Tor Network", "kurrat"};
 
-  app.set_version_flag("-v,--version", "v0.0.1");
+  app.set_version_flag("-v,--version", "v0.0.2");
 
   std::string key_path;
   app.add_option("key_folder", key_path, "The path of your key folder")
@@ -130,27 +130,28 @@ int main(int argc, char **argv) {
       ->group("EXIT SELECTION")
       ->needs(maxmind_opt);
 
-  std::optional<std::string> exit_addr = {};
-  auto addr_opt =
-      app.add_option("--exit_addr", exit_addr, "Optional predefined exit node")
-          ->group("EXIT SELECTION");
+  std::optional<std::string> requested_exit_addr = {};
+  auto addr_opt = app.add_option("--exit_addr", requested_exit_addr,
+                                 "Optional predefined exit node")
+                      ->group("EXIT SELECTION");
 
-  std::optional<std::string> exit_port = {};
-  auto port_opt = app.add_option("--exit_port", exit_port,
+  std::optional<std::string> requested_exit_port = {};
+  auto port_opt = app.add_option("--exit_port", requested_exit_port,
                                  "Optional predefined exit node port")
                       ->group("EXIT SELECTION")
                       ->needs(addr_opt);
 
-  std::optional<std::string> exit_identity_b64 = {};
+  std::optional<std::string> requested_exit_identity_b64 = {};
   auto identity_b64_opt =
-      app.add_option("--exit_identity_b64", exit_identity_b64,
-                     "Optional predefined exit node identity_b64")
+      app.add_option(
+             "--exit_identity_b64", requested_exit_identity_b64,
+             "Optional predefined exit node identity key encoded in base64")
           ->group("EXIT SELECTION")
           ->needs(addr_opt);
 
-  std::optional<std::string> exit_ntor_b64 = {};
+  std::optional<std::string> requested_exit_ntor_b64 = {};
   auto ntor_b64_opt =
-      app.add_option("--exit_ntor_b64", exit_ntor_b64,
+      app.add_option("--exit_ntor_b64", requested_exit_ntor_b64,
                      "Optional predefined exit node ntor key encoded in base64")
           ->group("EXIT SELECTION")
           ->needs(addr_opt);
@@ -194,7 +195,7 @@ int main(int argc, char **argv) {
 
   std::optional<ExitInfo> exit_node;
 
-  if (!exit_addr.has_value()) {
+  if (!requested_exit_addr.has_value()) {
 
     exit_node = find_exit_node(mmdb, country, exit_canidates->second,
                                exit_canidates->first);
@@ -208,10 +209,10 @@ int main(int argc, char **argv) {
       return 1;
     }
   } else {
-    exit_node = ExitInfo{.idenity_key = exit_identity_b64.value(),
-                         .ip = exit_addr.value(),
-                         .port = exit_port.value(),
-                         .ntor_key = exit_ntor_b64.value()};
+    exit_node = ExitInfo{.idenity_key = requested_exit_identity_b64.value(),
+                         .ip = requested_exit_addr.value(),
+                         .port = requested_exit_port.value(),
+                         .ntor_key = requested_exit_ntor_b64.value()};
   }
 
   std::thread socks_thread([socks5_port] {
@@ -225,13 +226,13 @@ int main(int argc, char **argv) {
   size_t connection_restarts = 0;
 
   while (true) {
-    mbedtls_net_context server_ctx;
+    mbedtls_net_context tcp_net;
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
 
-    mbedtls_net_init(&server_ctx);
+    mbedtls_net_init(&tcp_net);
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
     mbedtls_entropy_init(&entropy);
@@ -247,30 +248,23 @@ int main(int argc, char **argv) {
     mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                           (const unsigned char *)"client", 6);
 
-    std::string other_addr_str = exit_node->ip;
-    std::string remote_identity_b64 = exit_node->idenity_key;
-    std::string remote_ntor_b64 = exit_node->ntor_key;
-    std::string port = exit_node->port;
-
-    // std::string other_addr_str = "127.0.0.1";
-    // std::string remote_identity_b64 = "JnAOtHlIDaMEWjtDS/es3uRvlP0";
-    // std::string remote_ntor_b64 =
-    // "q/qPlOcH+iQ6rQn6hY3gr+ekPlz3YY9seXagM9KZIks";
+    std::string exit_addr_str = exit_node->ip;
+    std::string exit_identity_b64 = exit_node->idenity_key;
+    std::string exit_ntor_b64 = exit_node->ntor_key;
+    std::string exit_port = exit_node->port;
 
     printf(
         GRN
         "[exit] --exit_addr %s --exit_port %s\n       --exit_identity_b64 %s "
         "\n       --exit_ntor_b64 %s\n",
-        other_addr_str.c_str(), port.c_str(), remote_identity_b64.c_str(),
-        remote_ntor_b64.c_str());
+        exit_addr_str.c_str(), exit_port.c_str(), exit_identity_b64.c_str(),
+        exit_ntor_b64.c_str());
 
-    if (no_retry_mbedtls_net_connect(&server_ctx, other_addr_str.c_str(),
-                                     exit_node->port.c_str(),
+    if (no_retry_mbedtls_net_connect(&tcp_net, exit_addr_str.c_str(),
+                                     exit_port.c_str(),
                                      MBEDTLS_NET_PROTO_TCP) != 0) {
-      do {
-        exit_node = find_exit_node(mmdb, country, exit_canidates->second,
-                                   exit_canidates->first, connection_restarts);
-      } while (!exit_node.has_value());
+      exit_node = find_exit_node(mmdb, country, exit_canidates->second,
+                                 exit_canidates->first, connection_restarts);
 
       goto end_loop;
     }
@@ -283,7 +277,7 @@ int main(int argc, char **argv) {
 
     mbedtls_ssl_setup(&ssl, &conf);
 
-    mbedtls_ssl_set_bio(&ssl, &server_ctx, mbedtls_net_send, mbedtls_net_recv,
+    mbedtls_ssl_set_bio(&ssl, &tcp_net, mbedtls_net_send, mbedtls_net_recv,
                         NULL);
 
     if (mbedtls_ssl_handshake(&ssl) != 0) {
@@ -291,18 +285,18 @@ int main(int argc, char **argv) {
     }
 
     {
-      mbedtls_net_set_nonblock(&server_ctx);
+      mbedtls_net_set_nonblock(&tcp_net);
 
       // reduce size format of ip addresses
 
       struct in_addr other_addr;
-      inet_pton(AF_INET, other_addr_str.c_str(), &other_addr);
+      inet_pton(AF_INET, exit_addr_str.c_str(), &other_addr);
       uint32_t other_addr_raw = other_addr.s_addr;
 
       auto connection_opt = make_tor_connection(
           keys_parsed->secret_id_key, keys_parsed->master_id_secret_key_raw,
           keys_parsed->signing_secret_key, keys_parsed->ntor_key, &ctr_drbg,
-          remote_ntor_b64, remote_identity_b64, other_addr_raw, ssl);
+          exit_ntor_b64, exit_identity_b64, other_addr_raw, ssl);
 
       if (!connection_opt.has_value()) {
         fprintf(stderr, RED "[tor] error creating connection: %s\n",
@@ -359,7 +353,7 @@ int main(int argc, char **argv) {
 
   end_loop:
     mbedtls_ssl_free(&ssl);
-    mbedtls_net_free(&server_ctx);
+    mbedtls_net_free(&tcp_net);
     mbedtls_entropy_free(&entropy);
     mbedtls_ctr_drbg_free(&ctr_drbg);
 

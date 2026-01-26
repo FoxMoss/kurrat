@@ -171,7 +171,7 @@ public:
 
   void generate_versions_cell(std::vector<uint8_t> &return_buffer) {
     std::vector<uint8_t> data = {};
-    uint16_t version_data = htons(3);
+    uint16_t version_data = htons(3); // tor version 3
     data.insert(data.end(), (uint8_t *)&version_data,
                 (uint8_t *)&version_data + sizeof(uint16_t));
     generate_cell_variable(return_buffer, 0, 7, data);
@@ -711,6 +711,9 @@ private:
                                     combined_key.begin() + 20 + 20 + 16 + 16);
     mbedtls_aes_setkey_enc(&backward_aes_ctx, backward_encryption_key->data(),
                            128);
+
+    connected_to_exit = true;
+    printf(GRN "[tor] connected to exit node and ready to accept\n");
   }
 
   struct TorStream {
@@ -845,9 +848,6 @@ private:
       data.insert(data.end(), auth_buffer.begin(), auth_buffer.end());
 
       generate_cell_variable(send_buffer, 0, 131, data);
-
-      connected_to_exit = true;
-      printf(GRN "[tor] connected to exit node and ready to accept\n");
     }
 
     auth_challenges.clear();

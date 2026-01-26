@@ -54,6 +54,15 @@ If you do not curently run a Tor relay node you have two options:
 1. Ask a relay owner for their keys
 2. [Start running a relay node](https://community.torproject.org/relay/setup/guard/)
 
+## Install
+
+Grab the latest kurrat-musl build from [the releases tab](https://github.com/FoxMoss/kurrat/releases).
+Mark as an executable, and run from your CLI.
+
+Not on any package managers at the current moment.
+
+If you so choose you can compile from source.
+
 ## Usage
 
 Starting a connection is simple:
