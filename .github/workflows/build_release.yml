@@ -18,7 +18,7 @@ jobs:
           apk add cmake make build-base git python3 clang18
           mkdir build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DKURRAT_BUILD_STATIC=ON -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DKURRAT_BUILD_STATIC=ON -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc
           make -j$(nproc)
         shell: alpine.sh --root {0}
         
