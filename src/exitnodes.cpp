@@ -41,7 +41,7 @@ size_t write_data(void *buffer, size_t size, size_t nmemb,
 
 int progress_callback(time_t *clientp, curl_off_t dltotal, curl_off_t dlnow,
                       curl_off_t ultotal, curl_off_t ulnow) {
-  if (time(NULL) - *clientp > 30 && dlnow == 0) {
+  if (time(NULL) - *clientp > 1000 && dlnow == 0) {
     printf("connection timed out\n");
     return -1;
   }
@@ -177,10 +177,10 @@ grab_consensus(std::optional<MMDB_s> mmdb, std::optional<std::string> place) {
     }
   }
 
-  std::sort(exit_canidates.begin(), exit_canidates.end(),
-            [](ExitInfo &a, ExitInfo &b) {
-              return a.bandwidth_size > b.bandwidth_size;
-            });
+  std::random_device rd;
+  std::mt19937 g(rd());
+
+  std::shuffle(exit_canidates.begin(), exit_canidates.end(), g);
 
   return std::make_pair(exit_canidates, host);
 }

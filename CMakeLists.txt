@@ -3,8 +3,8 @@ set(CMAKE_CXX_STANDARD 20)
 
 project(Kurrat)
 
-# set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
-# set(CMAKE_C_FLAGS_DEBUG  "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address")
+set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address -ggdb")
+set(CMAKE_C_FLAGS_DEBUG  "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address -ggdb")
 
 option(KURRAT_BUILD_STATIC "Will the binary be built as a self contained static executable" OFF)
 

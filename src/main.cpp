@@ -57,7 +57,7 @@ int no_retry_mbedtls_net_connect(mbedtls_net_context *ctx, const char *host,
 
     // https://stackoverflow.com/a/46473173
     struct timeval timeout;
-    timeout.tv_sec = 1; // after 7 seconds connect() will timeout
+    timeout.tv_sec = 1; // aftr 7 seconds connect() will timeout
     timeout.tv_usec = 0;
     setsockopt(ctx->fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
   signal(SIGINT, int_handler);
   signal(SIGPIPE, pipe_handler);
 
-  CLI::App app{"A single hop VPN that abuses The Tor Network", "kurrat"};
+  CLI::App app{"A single hop VPN that uses The Tor Network", "kurrat"};
 
   app.set_version_flag("-v,--version", "v0.0.3");
 
@@ -187,15 +187,14 @@ int main(int argc, char **argv) {
     }
   }
 
-  auto exit_canidates = grab_consensus(mmdb, country);
-  if (!exit_canidates.has_value()) {
-    fprintf(stderr, RED "[exit] failed to grab exit canidates\n");
-    return 1;
-  }
-
+  std::optional<std::pair<std::vector<ExitInfo>, std::string>> exit_canidates;
   std::optional<ExitInfo> exit_node;
-
   if (!requested_exit_addr.has_value()) {
+    exit_canidates = grab_consensus(mmdb, country);
+    if (!exit_canidates.has_value()) {
+      fprintf(stderr, RED "[exit] failed to grab exit canidates\n");
+      return 1;
+    }
 
     exit_node = find_exit_node(mmdb, country, exit_canidates->second,
                                exit_canidates->first);
@@ -213,6 +212,8 @@ int main(int argc, char **argv) {
                          .ip = requested_exit_addr.value(),
                          .port = requested_exit_port.value(),
                          .ntor_key = requested_exit_ntor_b64.value()};
+
+    exit_canidates = {{exit_node.value()}, "0.0.0.0"};
   }
 
   std::thread socks_thread([socks5_port] {
@@ -248,6 +249,10 @@ int main(int argc, char **argv) {
     mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
                           (const unsigned char *)"client", 6);
 
+    if (!exit_node.has_value()) {
+      printf(RED "[main] error: no exit node\n");
+      return -1;
+    }
     std::string exit_addr_str = exit_node->ip;
     std::string exit_identity_b64 = exit_node->idenity_key;
     std::string exit_ntor_b64 = exit_node->ntor_key;
